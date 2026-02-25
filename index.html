@@ -253,6 +253,26 @@ tr:hover td{background:var(--surf2);}
 .cell-author::after{content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:4px solid transparent;border-top-color:#1a1d23;}
 .sc-cell:hover .cell-author{display:block;}
 
+
+/* ── STAT PANEL (side drawer) ── */
+.stat-panel-overlay{position:fixed;inset:0;z-index:200;pointer-events:none;}
+.stat-panel-overlay.open{pointer-events:all;}
+.stat-panel-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.3);opacity:0;transition:opacity .3s;}
+.stat-panel-overlay.open .stat-panel-backdrop{opacity:1;}
+.stat-panel{position:absolute;top:0;right:0;height:100%;width:min(640px,92vw);background:var(--surface);box-shadow:-8px 0 40px rgba(0,0,0,.18);transform:translateX(100%);transition:transform .35s cubic-bezier(.4,0,.2,1);overflow-y:auto;display:flex;flex-direction:column;}
+.stat-panel-overlay.open .stat-panel{transform:translateX(0);}
+.stat-panel-head{padding:18px 22px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:var(--surface);z-index:2;}
+.stat-panel-title{font-size:16px;font-weight:800;}
+.stat-panel-close{width:30px;height:30px;border-radius:50%;background:var(--bg);border:none;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;color:var(--muted);transition:background .15s;}
+.stat-panel-close:hover{background:var(--border);color:var(--txt);}
+.stat-panel-body{padding:20px 22px;flex:1;}
+/* Stat card enhancements */
+.stat-card{transition:transform .2s,box-shadow .2s,border-color .2s !important;border:1.5px solid transparent !important;}
+.stat-card:hover{transform:translateY(-4px) !important;box-shadow:0 12px 32px rgba(0,0,0,.13) !important;border-color:var(--red) !important;}
+/* SVG tooltip */
+.svg-tip{position:fixed;background:#1a1d23;color:#fff;font-size:11px;padding:5px 9px;border-radius:6px;pointer-events:none;z-index:9000;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,.3);display:none;}
+.svg-tip.show{display:block;}
+
 </style>
 
 <!-- Firebase SDK -->
@@ -289,6 +309,10 @@ tr:hover td{background:var(--surf2);}
       <div class="ng-lbl">Livraison</div>
       <div class="ni" data-view="livraison" onclick="nav('livraison',this)"><span class="ic">🚀</span>Livraisons</div>
       <div class="ni" data-view="historique" onclick="nav('historique',this)"><span class="ic">🔄</span>Reprises LIT</div>
+    </div>
+    <div class="ng">
+      <div class="ng-lbl">Analyse</div>
+      <div class="ni" data-view="stats" onclick="nav('stats',this)"><span class="ic">📈</span>Statistiques</div>
     </div>
     <div class="ng">
       <div class="ng-lbl">Projet</div>
@@ -379,8 +403,24 @@ tr:hover td{background:var(--surf2);}
             <div style="padding:7px;background:var(--surf2);border-radius:6px">Complétude des données livrées</div>
             <div style="padding:7px;background:var(--surf2);border-radius:6px">Timestamp correct et système de coordonnées conforme</div>
           </div>
-          <div class="fi-lbl" style="margin-bottom:4px">Notes / Consignes particulières</div>
-          <textarea class="ta" id="cad-notes" placeholder="Consignes, vigilances…" oninput="saveCadNotes(this.value)" style="min-height:65px"></textarea>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+            <div class="fi-lbl" style="margin-bottom:0">📋 Consignes particulières</div>
+            <span id="cad-consignes-count" style="font-size:10px;color:var(--muted)"></span>
+          </div>
+          <!-- Add consigne form -->
+          <div style="display:flex;gap:8px;margin-bottom:12px;align-items:flex-start">
+            <textarea id="cad-new-consigne" class="ta" placeholder="Écrire une consigne, vigilance ou note…" style="min-height:52px;flex:1;resize:vertical"></textarea>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <select class="fsel" id="cad-consigne-priority" style="width:120px">
+                <option value="info">ℹ️ Info</option>
+                <option value="warn">⚠️ Vigilance</option>
+                <option value="urgent">🔴 Urgent</option>
+              </select>
+              <button class="btn btn-primary btn-sm" onclick="addConsigne()" style="white-space:nowrap">+ Ajouter</button>
+            </div>
+          </div>
+          <!-- Consignes list -->
+          <div id="cad-consignes-list"></div>
         </div>
       </div>
     </div>
@@ -454,23 +494,71 @@ tr:hover td{background:var(--surf2);}
         <div class="tab" onclick="showPhase('kad',this)">Traitement KAD</div>
         <div class="tab" onclick="showPhase('liv',this)">Livraison</div>
       </div>
+      <!-- Filter bar -->
       <div class="card" style="margin-bottom:10px">
-        <div class="card-head">
-          <div class="card-title" style="font-size:12px">Filtres</div>
-          <div class="filters">
-            <input type="text" class="finp" id="ph-search" placeholder="🔍 Rechercher LIT…" oninput="renderPhase(_curPhase)" style="width:160px">
+        <div class="card-head" style="flex-wrap:wrap;gap:8px">
+          <div class="card-title" style="font-size:12px">🔍 Filtres</div>
+          <div class="filters" style="flex-wrap:wrap;gap:6px">
+            <input type="text" class="finp" id="ph-search" placeholder="Rechercher LIT…" oninput="renderPhase(_curPhase)" style="width:140px">
             <select class="fsel" id="ph-lot" onchange="renderPhase(_curPhase)"><option value="">Tous lots</option></select>
+            <select class="fsel" id="ph-step" onchange="renderPhase(_curPhase)"><option value="">Toutes étapes</option></select>
+            <select class="fsel" id="ph-step-status" onchange="renderPhase(_curPhase)">
+              <option value="">Tous états</option>
+              <option value="OK">✓ OK</option>
+              <option value="EN_COURS">⏳ En cours</option>
+              <option value="NON">✗ Non OK</option>
+              <option value="null">— Vide</option>
+            </select>
             <select class="fsel" id="ph-status" onchange="renderPhase(_curPhase)">
-              <option value="">Tous statuts</option>
-              <option value="ok">✓ OK</option>
-              <option value="nok">✗ Non OK</option>
-              <option value="pending">— À compléter</option>
+              <option value="">Phase globale</option>
+              <option value="ok">✓ Phase complète</option>
+              <option value="nok">✗ Phase incomplète</option>
+              <option value="pending">— À démarrer</option>
             </select>
             <button class="btn btn-secondary btn-sm" onclick="resetPhaseFilters()">✕ Réinitialiser</button>
-            <span id="ph-count" style="font-size:11px;color:var(--muted);margin-left:4px"></span>
+            <span id="ph-count" style="font-size:11px;color:var(--muted)"></span>
           </div>
         </div>
       </div>
+      <!-- Bulk update panel -->
+      <div class="card" style="margin-bottom:10px;border:1.5px solid var(--blue-lt)">
+        <div class="card-head" style="cursor:pointer" onclick="toggleBulkPanel()">
+          <div class="card-title" style="font-size:12px">⚡ Mise à jour en masse <span id="bulk-toggle-icon">▼</span></div>
+          <span style="font-size:10px;color:var(--muted)">Modifier plusieurs LITs simultanément</span>
+        </div>
+        <div id="bulk-panel" style="display:none;padding:12px 16px;border-top:1px solid var(--border)">
+          <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end">
+            <div>
+              <div class="fi-lbl">Étape à modifier</div>
+              <select class="fsel" id="bulk-step" style="min-width:180px" onchange="updateBulkPreview()"><option value="">— Choisir une étape —</option></select>
+            </div>
+            <div>
+              <div class="fi-lbl">Nouvel état</div>
+              <select class="fsel" id="bulk-value" onchange="updateBulkPreview()">
+                <option value="OK">✓ OK</option>
+                <option value="EN_COURS">⏳ En cours</option>
+                <option value="NON-LIVRÉ">✗ Non OK</option>
+                <option value="">— Vider</option>
+              </select>
+            </div>
+            <div>
+              <div class="fi-lbl">Appliquer sur</div>
+              <select class="fsel" id="bulk-scope" onchange="updateBulkPreview()">
+                <option value="filtered">LITs affichées (filtrées)</option>
+                <option value="lot">Un lot spécifique</option>
+                <option value="all">Toutes les LITs</option>
+              </select>
+            </div>
+            <div id="bulk-lot-wrap" style="display:none">
+              <div class="fi-lbl">Lot</div>
+              <select class="fsel" id="bulk-lot-sel"></select>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="applyBulkUpdate()" style="align-self:flex-end">⚡ Appliquer</button>
+          </div>
+          <div id="bulk-preview" style="margin-top:10px;font-size:11px;color:var(--muted);padding:7px 10px;background:var(--bg);border-radius:6px;display:none"></div>
+        </div>
+      </div>
+      <!-- Table -->
       <div class="card"><div class="card-body" style="padding:0">
         <div class="tbl-wrap"><table><thead id="ph-head"></thead><tbody id="ph-body"></tbody></table></div>
       </div></div>
@@ -536,7 +624,12 @@ tr:hover td{background:var(--surf2);}
       </div>
     </div>
 
-    <!-- SETTINGS -->
+    <!-- STATS -->
+    <div class="view" id="view-stats">
+      <div id="stats-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px"></div>
+    </div>
+
+<!-- SETTINGS -->
     <div class="view" id="view-settings">
       <div class="card">
         <div class="card-head"><div class="card-title">Paramètres</div></div>
@@ -748,8 +841,12 @@ function initTrigram(){
     CURRENT_USER = saved;
     updateUserBadge();
     hideTrigram();
+    // App already rendered by nav() above — Firebase will update when ready
   } else {
+    // Show overlay — app renders in background, will be visible after trigram entry
     showTrigram();
+    // Pre-render in background so it's instant when overlay closes
+    _refreshAll();
   }
 }
 function showTrigram(){
@@ -777,6 +874,8 @@ function confirmTrigram(){
   localStorage.setItem('k5_trigram', val);
   hideTrigram();
   updateUserBadge();
+  // Force render with current data (Firebase may still be loading)
+  _refreshAll();
 }
 function changeTrigram(){
   document.getElementById('trig-inp').value = CURRENT_USER;
@@ -801,11 +900,21 @@ var firebaseConfig = {
   messagingSenderId: "509738126857",
   appId: "1:509738126857:web:099212f9a6ec2bdc8c32d8"
 };
-firebase.initializeApp(firebaseConfig);
-var db = firebase.database();
-var DB_REF = db.ref('kadran_v5');
+var _fbAvailable = (typeof firebase !== 'undefined');
+var DB_REF = null;
 var _fbLoaded = false;
 var _localInit = false;
+
+if(_fbAvailable){
+  try {
+    firebase.initializeApp(firebaseConfig);
+    var db = firebase.database();
+    DB_REF = db.ref('kadran_v5');
+  } catch(e) {
+    console.warn('Firebase init failed:', e);
+    _fbAvailable = false;
+  }
+}
 
 // ── STATE ──
 // Pre-stamp all editable fields with TPA as initial author
@@ -832,11 +941,18 @@ var S = {
   deliveries: [],
   reprises: RAW_HIST.map(function(h){ return Object.assign({}, h); }),
   cadNotes: '',
+  consignes: [],
 };
 
 // ── PERSIST ──
 var _saveTimer = null;
 function save(){
+  if(!DB_REF){
+    // Offline: persist to localStorage
+    try { localStorage.setItem('kadran_v5_local', JSON.stringify(S)); } catch(e){}
+    showAS('offline');
+    return;
+  }
   showAS('saving');
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(function(){
@@ -881,6 +997,7 @@ function showAS(s){
 // Track last save timestamp to avoid re-applying our own writes
 var _lastSaveTs = 0;
 
+if(DB_REF){
 DB_REF.on('value', function(snapshot){
   var remote = snapshot.val();
   if(!remote){
@@ -927,6 +1044,7 @@ DB_REF.on('value', function(snapshot){
   if(remote.deliveries) S.deliveries = remote.deliveries;
   if(remote.reprises && remote.reprises.length) S.reprises = remote.reprises;
   if(remote.cadNotes !== undefined) S.cadNotes = remote.cadNotes;
+  if(remote.consignes) S.consignes = remote.consignes;
 
   // Merge any LITs present in RAW but not in remote data
   var _ls = new Set(S.data.map(function(d){return d.lit;}));
@@ -943,8 +1061,10 @@ DB_REF.on('value', function(snapshot){
   showAS('online');
   _refreshAll();
 });
+} // end if(DB_REF)
 
 // Connection state indicator
+if(typeof db !== 'undefined'){
 db.ref('.info/connected').on('value', function(snap){
   if(!snap.val()){
     showAS('error');
@@ -954,6 +1074,7 @@ db.ref('.info/connected').on('value', function(snap){
     showAS('online');
   }
 });
+} // end if(typeof db !== 'undefined')
 
 function _refreshAll(){
   // Refresh whichever view is currently active
@@ -968,7 +1089,8 @@ function _refreshAll(){
     livraison: function(){ renderLivraison(); fillLivFilters(); fillDelLit(); },
     historique: renderHistorique,
     reminders: renderReminders,
-    planning: renderGantt
+    planning: renderGantt,
+    stats: renderStats
   };
   if(F[id]) F[id]();
   // Also update rem badge
@@ -1060,9 +1182,9 @@ function nav(id,el){
   document.querySelectorAll('.ni').forEach(function(n){n.classList.remove('active');});
   document.getElementById('view-'+id).classList.add('active');
   if(el) el.classList.add('active');
-  var T={dashboard:'Tableau de bord',cadrage:'Cadrage Projet',reminders:'Rappels',lits:'Liste LIT',lots:'Synthèse Lots',planning:'Planning Gantt',phases:'Phases Traitement',livraison:'Livraisons',historique:'Reprises LIT',settings:'Paramètres'};
+  var T={dashboard:'Tableau de bord',cadrage:'Cadrage Projet',reminders:'Rappels',lits:'Liste LIT',lots:'Synthèse Lots',planning:'Planning Gantt',phases:'Phases Traitement',livraison:'Livraisons',historique:'Reprises LIT',stats:'Statistiques',settings:'Paramètres'};
   document.getElementById('tb-title').textContent=T[id]||id;
-  var F={dashboard:renderDashboard,planning:renderGantt,lits:function(){fillLitFilters();renderLits();},lots:renderLots,phases:function(){fillPhaseFilters();renderPhase('trt');},livraison:function(){renderLivraison();fillLivFilters();fillDelLit();},historique:renderHistorique,reminders:renderReminders,cadrage:function(){var el=document.getElementById('cad-notes');if(el)el.value=S.cadNotes||'';}};
+  var F={dashboard:renderDashboard,planning:renderGantt,lits:function(){fillLitFilters();renderLits();},lots:renderLots,phases:function(){fillPhaseFilters();renderPhase('trt');},livraison:function(){renderLivraison();fillLivFilters();fillDelLit();},historique:renderHistorique,reminders:renderReminders,stats:renderStats,cadrage:function(){var el=document.getElementById('cad-notes');if(el)el.value=S.cadNotes||'';renderConsignes();}};
   if(F[id]) F[id]();
 }
 
@@ -1113,6 +1235,47 @@ function updateRemBadge(){
 
 // ── CADRAGE ──
 function saveCadNotes(v){S.cadNotes=v;save();}
+function renderConsignes(){
+  var list=document.getElementById('cad-consignes-list');
+  var counter=document.getElementById('cad-consignes-count');
+  if(!list) return;
+  var items=S.consignes||[];
+  if(counter) counter.textContent=items.length+' consigne'+(items.length>1?'s':'');
+  if(!items.length){
+    list.innerHTML='<div style="text-align:center;color:var(--muted);font-size:12px;padding:16px 0">Aucune consigne</div>';
+    return;
+  }
+  var P={info:{bg:'var(--blue-lt)',border:'var(--blue)',label:'ℹ️ Info',txt:'var(--blue)'},warn:{bg:'var(--warn-bg)',border:'var(--warn)',label:'⚠️ Vigilance',txt:'var(--warn)'},urgent:{bg:'#fef2f2',border:'var(--err)',label:'🔴 Urgent',txt:'var(--err)'}};
+  list.innerHTML=items.map(function(it,i){
+    var p=P[it.priority]||P.info;
+    var date=it.at?(it.at.slice(0,10)+' '+it.at.slice(11,16)):'';
+    return '<div style="border:1.5px solid '+p.border+';background:'+p.bg+';border-radius:8px;padding:10px 14px;margin-bottom:8px">'
+      +'<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">'
+      +'<div style="flex:1"><span style="display:inline-block;font-size:10px;font-weight:700;color:'+p.txt+';background:rgba(255,255,255,.6);border-radius:4px;padding:1px 6px;margin-bottom:5px">'+p.label+'</span>'
+      +'<div style="font-size:12px;line-height:1.6;white-space:pre-wrap">'+it.text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')+'</div></div>'
+      +'<button onclick="deleteConsigne('+i+')" style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:16px;line-height:1;padding:0;flex-shrink:0" title="Supprimer">×</button>'
+      +'</div>'
+      +'<div style="margin-top:5px;font-size:10px;color:var(--muted)">👤 '+(it.by||'?')+' · '+date+'</div>'
+      +'</div>';
+  }).join('');
+}
+function addConsigne(){
+  var inp=document.getElementById('cad-new-consigne');
+  var prio=(document.getElementById('cad-consigne-priority')||{}).value||'info';
+  var text=(inp?inp.value:'').trim();
+  if(!text){if(inp)inp.focus();return;}
+  if(!S.consignes) S.consignes=[];
+  S.consignes.push({text:text,priority:prio,by:CURRENT_USER||'?',at:new Date().toISOString()});
+  if(inp) inp.value='';
+  save();
+  renderConsignes();
+}
+function deleteConsigne(idx){
+  if(!confirm('Supprimer cette consigne ?')) return;
+  S.consignes.splice(idx,1);
+  save();
+  renderConsignes();
+}
 
 // ── GANTT ──
 var G_START=new Date('2025-11-01');
@@ -1466,17 +1629,100 @@ function showPhase(ph,el){
   document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});
   if(el) el.classList.add('active');
   fillPhaseFilters();
+  // Reset step filters when changing tab
+  var ps=document.getElementById('ph-step'); if(ps) ps.value='';
+  var pss=document.getElementById('ph-step-status'); if(pss) pss.value='';
   renderPhase(ph);
 }
 function fillPhaseFilters(){
-  var sel=document.getElementById('ph-lot');
-  if(sel&&sel.options.length<=1) lots().forEach(function(l){sel.add(new Option('Lot '+l,l));});
+  var selLot=document.getElementById('ph-lot');
+  if(selLot&&selLot.options.length<=1) lots().forEach(function(l){selLot.add(new Option('Lot '+l,l));});
+  var selBulkLot=document.getElementById('bulk-lot-sel');
+  if(selBulkLot&&selBulkLot.options.length===0) lots().forEach(function(l){selBulkLot.add(new Option('Lot '+l,l));});
+  fillPhaseStepFilter();
+  fillBulkSteps();
+}
+function fillPhaseStepFilter(){
+  var cfg=PH_CFG[_curPhase];
+  var sel=document.getElementById('ph-step');
+  if(!sel) return;
+  sel.innerHTML='<option value="">Toutes étapes</option>';
+  cfg.keys.slice(2).forEach(function(k,i){
+    sel.add(new Option(cfg.cols[i+2], k));
+  });
+}
+function fillBulkSteps(){
+  var cfg=PH_CFG[_curPhase];
+  var sel=document.getElementById('bulk-step');
+  if(!sel) return;
+  sel.innerHTML='<option value="">— Choisir une étape —</option>';
+  cfg.keys.slice(2).forEach(function(k,i){
+    if(EDITABLE.has(k)) sel.add(new Option(cfg.cols[i+2], k));
+  });
+  updateBulkPreview();
 }
 function resetPhaseFilters(){
-  var s=document.getElementById('ph-search');if(s)s.value='';
-  var l=document.getElementById('ph-lot');if(l)l.value='';
-  var st=document.getElementById('ph-status');if(st)st.value='';
+  ['ph-search','ph-lot','ph-step','ph-step-status','ph-status'].forEach(function(id){
+    var el=document.getElementById(id); if(el) el.value='';
+  });
   renderPhase(_curPhase);
+}
+function toggleBulkPanel(){
+  var p=document.getElementById('bulk-panel');
+  var icon=document.getElementById('bulk-toggle-icon');
+  var open=p.style.display==='none';
+  p.style.display=open?'':'none';
+  icon.textContent=open?'▲':'▼';
+}
+function updateBulkPreview(){
+  var scope=((document.getElementById('bulk-scope')||{}).value||'');
+  var lotWrap=document.getElementById('bulk-lot-wrap');
+  if(lotWrap) lotWrap.style.display=(scope==='lot')?'':'none';
+
+  var step=(document.getElementById('bulk-step')||{}).value||'';
+  var val=(document.getElementById('bulk-value')||{}).value;
+  var prev=document.getElementById('bulk-preview');
+  if(!prev) return;
+  if(!step){ prev.style.display='none'; return; }
+
+  var cfg=PH_CFG[_curPhase];
+  var stepLabel=cfg.cols[cfg.keys.indexOf(step)];
+  var targets=getBulkTargets();
+  var valLabel=val==='OK'?'✓ OK':val==='EN_COURS'?'⏳ En cours':val==='NON-LIVRÉ'?'✗ Non OK':'— Vide';
+  prev.style.display='';
+  prev.innerHTML='<b>'+targets.length+' LIT'+(targets.length>1?'s':'')+'</b> seront modifiées : <b>'+stepLabel+'</b> → <b>'+valLabel+'</b>';
+}
+function getBulkTargets(){
+  var scope=((document.getElementById('bulk-scope')||{}).value||'filtered');
+  var lotSel=((document.getElementById('bulk-lot-sel')||{}).value||'');
+  if(scope==='all') return S.data;
+  if(scope==='lot') return S.data.filter(function(d){return String(d.lot)===String(lotSel);});
+  // filtered = currently visible LITs
+  var search=((document.getElementById('ph-search')||{}).value||'').toLowerCase();
+  var lotF=((document.getElementById('ph-lot')||{}).value||'');
+  return S.data.filter(function(d){
+    if(search&&!d.lit.toLowerCase().includes(search)) return false;
+    if(lotF&&String(d.lot)!==String(lotF)) return false;
+    return true;
+  });
+}
+function applyBulkUpdate(){
+  var step=(document.getElementById('bulk-step')||{}).value||'';
+  if(!step){ alert('Veuillez choisir une étape.'); return; }
+  var val=(document.getElementById('bulk-value')||{}).value;
+  var targets=getBulkTargets();
+  if(!targets.length){ alert('Aucune LIT à modifier.'); return; }
+  var cfg=PH_CFG[_curPhase];
+  var stepLabel=cfg.cols[cfg.keys.indexOf(step)];
+  var valLabel=val==='OK'?'OK':val==='EN_COURS'?'En cours':val==='NON-LIVRÉ'?'Non OK':'vide';
+  if(!confirm('Confirmer : mettre "'+stepLabel+'" à "'+valLabel+'" pour '+targets.length+' LIT'+(targets.length>1?'s':'')+'?')) return;
+  targets.forEach(function(d){
+    d[step] = val||null;
+    stampEdit(d, step);
+  });
+  save();
+  renderPhase(_curPhase);
+  updateBulkPreview();
 }
 function renderPhase(ph){
   var cfg=PH_CFG[ph];
@@ -1485,12 +1731,24 @@ function renderPhase(ph){
   var lotF=((document.getElementById('ph-lot')||{}).value||'');
   var statusF=((document.getElementById('ph-status')||{}).value||'');
 
+  var stepF=((document.getElementById('ph-step')||{}).value||'');
+  var stepStatusF=((document.getElementById('ph-step-status')||{}).value||'');
+
   // Filter data
   var filtered=S.data.filter(function(d){
     if(search&&!d.lit.toLowerCase().includes(search)) return false;
     if(lotF&&String(d.lot)!==String(lotF)) return false;
+    // Per-step filter
+    if(stepF&&stepStatusF){
+      var v=d[stepF];
+      var raw=v===null||v===undefined?null:(v==='OK'?'OK':v==='EN_COURS'?'EN_COURS':'NON');
+      if(stepStatusF==='null'&&raw!==null) return false;
+      if(stepStatusF!=='null'&&raw!==stepStatusF) return false;
+    } else if(stepF&&!stepStatusF){
+      // just filter to LITs that have a value for this step (non-null)
+    }
+    // Global phase status filter
     if(statusF){
-      // Check all non-label keys for this phase
       var dataKeys=cfg.keys.slice(2);
       var allOk=dataKeys.every(function(k){return d[k]==='OK';});
       var anyNull=dataKeys.some(function(k){return !d[k]||d[k]===null;});
@@ -1696,8 +1954,487 @@ function exportCSV(){
   var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([rows.join('\n')],{type:'text/csv'}));a.download='kadran_export.csv';a.click();
 }
 
+
+// ── STATS ──
+
+// ─── SVG tooltip ───
+function showSvgTip(e,text){ var t=document.getElementById('svg-tip'); t.textContent=text; t.classList.add('show'); t.style.left=(e.clientX+14)+'px'; t.style.top=(e.clientY-36)+'px'; }
+function moveSvgTip(e){ var t=document.getElementById('svg-tip'); t.style.left=(e.clientX+14)+'px'; t.style.top=(e.clientY-36)+'px'; }
+function hideSvgTip(){ document.getElementById('svg-tip').classList.remove('show'); }
+
+// ─── Attach tooltip listeners after panel renders ───
+function attachStatTips(){
+  document.querySelectorAll('#stat-panel-body .donut-seg').forEach(function(el){
+    el.addEventListener('mouseover',function(e){ this.setAttribute('stroke-width',26); showSvgTip(e,this.getAttribute('data-tip')); });
+    el.addEventListener('mousemove',moveSvgTip);
+    el.addEventListener('mouseleave',function(){ this.setAttribute('stroke-width',20); hideSvgTip(); });
+  });
+  document.querySelectorAll('#stat-panel-body .bar-seg').forEach(function(el){
+    el.addEventListener('mouseover',function(e){ this.style.opacity='0.6'; showSvgTip(e,this.getAttribute('data-tip')); });
+    el.addEventListener('mousemove',moveSvgTip);
+    el.addEventListener('mouseleave',function(){ this.style.opacity='1'; hideSvgTip(); });
+  });
+  document.querySelectorAll('#stat-panel-body .hbar-seg').forEach(function(el){
+    el.addEventListener('mouseover',function(e){ this.style.opacity='0.65'; showSvgTip(e,this.getAttribute('data-tip')); });
+    el.addEventListener('mousemove',moveSvgTip);
+    el.addEventListener('mouseleave',function(){ this.style.opacity='1'; hideSvgTip(); });
+  });
+}
+
+// ─── SVG helpers ───
+function mkDonut(segs, W, label, sub){
+  W=W||300; var r=W*0.30, cx=W/2, cy=W/2, circ=2*Math.PI*r;
+  // Filter out zero segments to avoid visual artifacts
+  segs = segs.filter(function(sg){ return sg.v > 0; });
+  var total=segs.reduce(function(s,sg){return s+sg.v;},0)||1;
+  var offset=circ*0.25;
+  var h='<svg width="'+W+'" height="'+W+'" viewBox="0 0 '+W+' '+W+'" style="overflow:visible">';
+  // If only one segment left after filtering, draw a simple full circle
+  if(segs.length === 1){
+    h+='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="'+segs[0].c+'" stroke-width="'+Math.round(W*0.085)+'"/>';
+    if(label) h+='<text x="'+cx+'" y="'+(cy+4)+'" text-anchor="middle" dominant-baseline="middle" font-size="'+Math.round(W*0.11)+'" font-weight="800" fill="var(--txt)">'+label+'</text>';
+    if(sub) h+='<text x="'+cx+'" y="'+(cy+Math.round(W*0.11)+8)+'" text-anchor="middle" font-size="'+Math.round(W*0.066)+'" fill="var(--muted)">'+sub+'</text>';
+    h+='</svg>'; return h;
+  }
+  h+='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="var(--border)" stroke-width="'+Math.round(W*0.085)+'"/>';
+  var usedArc=0;
+  segs.forEach(function(sg,i){
+    var arc = (i===segs.length-1) ? (circ-usedArc) : circ*(sg.v/total);
+    arc = Math.max(0, arc);
+    usedArc += arc;
+    h+='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="'+sg.c+'" stroke-width="'+Math.round(W*0.085)+'"'
+     +' stroke-dasharray="'+arc.toFixed(3)+' '+(circ-arc).toFixed(3)+'" stroke-dashoffset="'+offset.toFixed(3)+'"'
+     +' stroke-linecap="butt" class="donut-seg" data-tip="'+sg.l+': '+sg.v+(sg.sub?' '+sg.sub:'')+'" style="cursor:pointer;transition:stroke-width .12s"/>';
+    offset-=arc;
+  });
+  var fs=Math.round(W*0.11);
+  if(label) h+='<text x="'+cx+'" y="'+(cy+4)+'" text-anchor="middle" dominant-baseline="middle" font-size="'+fs+'" font-weight="800" fill="var(--txt)">'+label+'</text>';
+  if(sub) h+='<text x="'+cx+'" y="'+(cy+fs+8)+'" text-anchor="middle" font-size="'+Math.round(fs*0.6)+'" fill="var(--muted)">'+sub+'</text>';
+  h+='</svg>'; return h;
+}
+
+function mkBars(items, W, H){
+  W=W||360; H=H||160;
+  var n=items.length, gap=6, bw=Math.max(10,Math.floor((W-n*gap)/n));
+  var maxV=Math.max.apply(null,items.map(function(it){return it.v;}))||1;
+  var h='<svg width="'+W+'" height="'+(H+36)+'" viewBox="0 0 '+W+' '+(H+36)+'" style="overflow:visible">';
+  // Y grid lines
+  [0.25,0.5,0.75,1].forEach(function(f){
+    var y=H-(H*f);
+    h+='<line x1="0" y1="'+y.toFixed(0)+'" x2="'+W+'" y2="'+y.toFixed(0)+'" stroke="var(--border)" stroke-width="1" stroke-dasharray="3,3"/>';
+    h+='<text x="-4" y="'+(y+4).toFixed(0)+'" text-anchor="end" font-size="9" fill="var(--muted)">'+Math.round(maxV*f)+'</text>';
+  });
+  items.forEach(function(it,i){
+    var x=i*(bw+gap)+gap/2;
+    var barH=Math.max(2,Math.round((it.v/maxV)*H));
+    var y=H-barH;
+    var col=it.c||'var(--blue)';
+    var tip=(it.l||'')+(it.v!==undefined?' : '+it.v:'')+( it.sub?' ('+it.sub+')':'');
+    h+='<rect x="'+x+'" y="'+y+'" width="'+bw+'" height="'+barH+'" rx="4" fill="'+col+'"'
+     +' class="bar-seg" data-tip="'+tip+'" style="cursor:pointer;transition:opacity .12s"/>';
+    if(it.v>0) h+='<text x="'+(x+bw/2).toFixed(0)+'" y="'+(y-5)+'" text-anchor="middle" font-size="10" font-weight="700" fill="var(--txt)">'+it.v+'</text>';
+    h+='<text x="'+(x+bw/2).toFixed(0)+'" y="'+(H+16)+'" text-anchor="middle" font-size="9" fill="var(--muted)">'+it.l+'</text>';
+  });
+  h+='</svg>'; return h;
+}
+
+function mkHBars(items, W){
+  W=W||340;
+  var maxV=Math.max.apply(null,items.map(function(it){return it.v;}))||1;
+  var rowH=30, pad=80;
+  var h='<svg width="'+W+'" height="'+(items.length*rowH+4)+'" viewBox="0 0 '+W+' '+(items.length*rowH+4)+'" style="overflow:visible">';
+  items.forEach(function(it,i){
+    var y=i*rowH+4;
+    var bw=Math.round((it.v/maxV)*(W-pad-40));
+    var col=it.c||'var(--blue)';
+    var tip=(it.l||'')+' : '+it.v+(it.sub?' '+it.sub:'');
+    h+='<text x="0" y="'+(y+16)+'" font-size="11" font-weight="600" fill="var(--txt)">'+it.l+'</text>';
+    h+='<rect x="'+pad+'" y="'+(y+4)+'" width="'+Math.max(bw,2)+'" height="16" rx="4" fill="'+col+'"'
+     +' class="hbar-seg" data-tip="'+tip+'" style="cursor:pointer;transition:opacity .12s"/>';
+    h+='<text x="'+(pad+Math.max(bw,2)+6)+'" y="'+(y+16)+'" font-size="10" fill="var(--muted)">'+it.v+(it.sub?' '+it.sub:'')+'</text>';
+  });
+  h+='</svg>'; return h;
+}
+
+function mkRadar(axes, vals, W){
+  W=W||280; var n=axes.length, cx=W/2, cy=W/2+10, R=W*0.33;
+  var pts=vals.map(function(v,i){ var a=(i/n)*2*Math.PI-Math.PI/2; var r=R*(v/100); return [(cx+r*Math.cos(a)).toFixed(1),(cy+r*Math.sin(a)).toFixed(1)]; });
+  var poly=pts.map(function(p){return p.join(',');}).join(' ');
+  var h='<svg width="'+W+'" height="'+(W+10)+'" viewBox="0 0 '+W+' '+(W+10)+'">';
+  [0.25,0.5,0.75,1].forEach(function(f){
+    var gp=axes.map(function(_,i){ var a=(i/n)*2*Math.PI-Math.PI/2; return [(cx+R*f*Math.cos(a)).toFixed(1),(cy+R*f*Math.sin(a)).toFixed(1)].join(','); });
+    h+='<polygon points="'+gp.join(' ')+'" fill="none" stroke="var(--border)" stroke-width="1"/>';
+    h+='<text x="'+(cx+2)+'" y="'+(cy-R*f+4)+'" font-size="8" fill="var(--muted)">'+Math.round(f*100)+'%</text>';
+  });
+  axes.forEach(function(_,i){ var a=(i/n)*2*Math.PI-Math.PI/2; h+='<line x1="'+cx+'" y1="'+cy+'" x2="'+(cx+R*Math.cos(a)).toFixed(1)+'" y2="'+(cy+R*Math.sin(a)).toFixed(1)+'" stroke="var(--border)" stroke-width="1"/>'; });
+  h+='<polygon points="'+poly+'" fill="var(--blue)" fill-opacity="0.18" stroke="var(--blue)" stroke-width="2.5"/>';
+  pts.forEach(function(p,i){ h+='<circle cx="'+p[0]+'" cy="'+p[1]+'" r="4" fill="var(--blue)" stroke="#fff" stroke-width="1.5"/>'; });
+  axes.forEach(function(ax,i){
+    var a=(i/n)*2*Math.PI-Math.PI/2;
+    var lx=(cx+(R+18)*Math.cos(a)).toFixed(1), ly=(cy+(R+18)*Math.sin(a)).toFixed(1);
+    h+='<text x="'+lx+'" y="'+ly+'" text-anchor="middle" dominant-baseline="middle" font-size="10" font-weight="600" fill="var(--txt)">'+ax+'</text>';
+    h+='<text x="'+lx+'" y="'+(parseFloat(ly)+12)+'" text-anchor="middle" font-size="9" fill="var(--blue)">'+vals[i]+'%</text>';
+  });
+  h+='</svg>'; return h;
+}
+
+function mkLegend(items){
+  return '<div style="display:flex;flex-wrap:wrap;gap:10px 18px;margin-top:14px">'
+    +items.map(function(it){ return '<div style="display:flex;align-items:center;gap:7px;font-size:12px"><div style="width:12px;height:12px;border-radius:50%;background:'+it.c+';flex-shrink:0"></div><span>'+it.l+' — <b>'+it.v+'</b>'+(it.sub?' <span style="color:var(--muted)">'+it.sub+'</span>':'')+'</span></div>'; }).join('')
+    +'</div>';
+}
+
+function kpiRow(items){
+  return '<div style="display:grid;grid-template-columns:repeat('+items.length+',1fr);gap:10px;margin-bottom:20px">'
+    +items.map(function(it){
+      return '<div style="background:var(--bg);border-radius:8px;padding:12px 14px;border-left:3px solid '+it.c+'">'
+        +'<div style="font-size:20px;font-weight:800;color:'+it.c+'">'+it.v+'</div>'
+        +'<div style="font-size:11px;font-weight:600;margin-top:2px">'+it.l+'</div>'
+        +(it.sub?'<div style="font-size:10px;color:var(--muted)">'+it.sub+'</div>':'')
+        +'</div>';
+    }).join('')+'</div>';
+}
+
+function section(title, content){
+  return '<div style="margin-bottom:24px">'
+    +'<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin-bottom:12px;padding-bottom:6px;border-bottom:1px solid var(--border)">'+title+'</div>'
+    +content+'</div>';
+}
+
+// ─── Card definitions ───
+var _statCards = [];
+
+function renderStats(){
+  var data=S.data, total=data.length;
+  var totalKm=data.reduce(function(s,d){return s+(parseFloat(d.lineaire)||0);},0);
+  var del=data.filter(delivered), delCount=del.length;
+  var delKm=del.reduce(function(s,d){return s+(parseFloat(d.lineaire)||0);},0);
+  var pending=data.filter(function(d){return !delivered(d);});
+
+  var onTime=0, late=0, delayData=[];
+  del.forEach(function(d){
+    if(d.planning&&d.date_livraison&&/^\d{4}/.test(d.planning)&&/^\d{4}/.test(d.date_livraison)){
+      var diff=Math.round((new Date(d.date_livraison)-new Date(d.planning))/86400000);
+      delayData.push({lit:d.lit,lot:d.lot,lin:parseFloat(d.lineaire)||0,plan:d.planning,liv:d.date_livraison,diff:diff});
+      if(diff<=0) onTime++; else late++;
+    }
+  });
+  var pctOnTime=delayData.length?Math.round(onTime/delayData.length*100):0;
+  var avgLate=late?Math.round(delayData.filter(function(r){return r.diff>0;}).reduce(function(s,r){return s+r.diff;},0)/late):0;
+  var avgEarly=onTime?Math.round(delayData.filter(function(r){return r.diff<=0;}).reduce(function(s,r){return s+Math.abs(r.diff);},0)/onTime):0;
+
+  var lotNums=lots();
+  var monthly={}; del.forEach(function(d){ if(d.date_livraison&&/^\d{4}/.test(d.date_livraison)){ var m=d.date_livraison.slice(0,7); if(!monthly[m]) monthly[m]={n:0,km:0}; monthly[m].n++; monthly[m].km+=parseFloat(d.lineaire)||0; } });
+  var months=Object.keys(monthly).sort();
+  var maxMon=Math.max.apply(null,months.map(function(m){return monthly[m].n;})||[1]);
+
+  var phDefs=[
+    {l:'Trt Brut',k:['calc_traj','ctrl_traj','gen_nuage','ctrl_geo','classif_auto','ctrl_classif_auto']},
+    {l:'Classif.',k:['ctrl_v1','ctrl_v2','ctrl_v3']},
+    {l:'KAD',    k:['tri_cables','ctrl_trous','ctrl_doubles','densif','declassif']},
+    {l:'Livraison',k:['import_dalles','ctrl_import','restit_emprise','restit_caract','restit_traj','rapport_meteo','ctrl_livraison']}
+  ];
+  var phVals=phDefs.map(function(ph){ var t=data.length*ph.k.length||1,done=0; data.forEach(function(d){ph.k.forEach(function(k){if(d[k]==='OK')done++;});}); return Math.round(done/t*100); });
+
+  _statCards=[
+
+  // ── 1. AVANCEMENT GLOBAL ──
+  {id:'global', title:'🎯 Avancement global',
+   preview:function(){
+     var pct=Math.round(delCount/total*100);
+     return '<div style="display:flex;justify-content:center;padding:8px 0">'+mkDonut([
+       {v:delCount,c:'var(--ok)',l:'Livrées'},
+       {v:total-delCount,c:'var(--border)',l:'Restantes'}
+     ],150,pct+'%','LITs livrées')+'</div>';
+   },
+   detail:function(){
+     var pct=Math.round(delCount/total*100);
+     var pctKm=Math.round(delKm/totalKm*100);
+     var segs=[{v:delCount,c:'var(--ok)',l:'Livrées'},{v:total-delCount,c:'#e2e8f0',l:'Restantes'}];
+     return kpiRow([
+       {v:delCount+'/'+total,l:'LITs livrées',sub:pct+'% du total',c:'var(--ok)'},
+       {v:delKm.toFixed(1)+' km',l:'Linéaire livré',sub:pctKm+'% des '+totalKm.toFixed(0)+' km',c:'var(--blue)'},
+       {v:pending.length,l:'LITs restantes',sub:(totalKm-delKm).toFixed(1)+' km restants',c:'var(--warn)'},
+       {v:total,l:'LITs total',sub:totalKm.toFixed(1)+' km au total',c:'var(--muted)'}
+     ])
+     +section('Répartition livrées / restantes',
+       '<div style="display:flex;align-items:center;gap:32px;flex-wrap:wrap">'
+       +'<div style="flex:0 0 auto">'+mkDonut(segs,280,pct+'%','LITs')+'</div>'
+       +'<div style="flex:1;min-width:180px">'+mkLegend(segs.map(function(s){return {c:s.c,l:s.l,v:s.v+' LITs',sub:''};}))
+       +'<div style="margin-top:16px">'+mkHBars([
+         {l:'LITs livrées',v:delCount,c:'var(--ok)',sub:'LITs'},
+         {l:'km livrés',v:delKm.toFixed(1),c:'var(--blue)',sub:'km'},
+         {l:'LITs restantes',v:pending.length,c:'var(--warn)',sub:'LITs'},
+         {l:'km restants',v:(totalKm-delKm).toFixed(1),c:'var(--err)',sub:'km'}
+       ],380)+'</div></div></div>'
+     )
+     +section('Avancement par lot',
+       mkHBars(lotNums.map(function(lot){
+         var ld=data.filter(function(d){return d.lot==lot;}), ldel=ld.filter(delivered);
+         var pctL=ld.length?Math.round(ldel.length/ld.length*100):0;
+         var col=pctL===100?'var(--ok)':pctL>60?'var(--blue)':pctL>30?'var(--warn)':'var(--err)';
+         return {l:'Lot '+lot,v:pctL,c:col,sub:'%'};
+       }),420)
+     );
+   }},
+
+  // ── 2. DÉLAIS ──
+  {id:'delais', title:'📅 Respect des délais',
+   preview:function(){
+     return '<div style="display:flex;justify-content:center;padding:8px 0">'+mkDonut([
+       {v:onTime,c:'var(--ok)',l:'Dans les délais'},
+       {v:late,c:'var(--err)',l:'En retard'},
+       {v:delCount-delayData.length,c:'#e2e8f0',l:'Sans date'}
+     ],150,pctOnTime+'%','dans les délais')+'</div>';
+   },
+   detail:function(){
+     var sorted=delayData.slice().sort(function(a,b){return b.diff-a.diff;});
+     var top5late=sorted.filter(function(r){return r.diff>0;}).slice(0,5);
+     var top5early=sorted.slice(-5).reverse().filter(function(r){return r.diff<=0;});
+     var segs=[{v:onTime,c:'var(--ok)',l:'Dans les délais'},{v:late,c:'var(--err)',l:'En retard'},{v:delCount-delayData.length,c:'#e2e8f0',l:'Sans date planif.'}];
+     return kpiRow([
+       {v:pctOnTime+'%',l:'Dans les délais',sub:onTime+' LITs sur '+delayData.length,c:'var(--ok)'},
+       {v:late,l:'LITs en retard',sub:'Retard moyen : '+avgLate+' j',c:'var(--err)'},
+       {v:onTime,l:'LITs en avance',sub:'Avance moyenne : '+avgEarly+' j',c:'var(--blue)'},
+       {v:delCount-delayData.length,l:'Sans date planif.',sub:'Non évaluables',c:'var(--muted)'}
+     ])
+     +section('Répartition des délais',
+       '<div style="display:flex;align-items:center;gap:32px;flex-wrap:wrap">'
+       +'<div style="flex:0 0 auto">'+mkDonut(segs,280,pctOnTime+'%','dans les délais')+'</div>'
+       +'<div style="flex:1;min-width:200px">'+mkLegend(segs.map(function(s){return {c:s.c,l:s.l,v:s.v,sub:'LITs'};}))
+       +'<div style="margin-top:16px;font-size:12px;line-height:2">'
+       +'<div>⏰ Retard max : <b>'+(sorted[0]?'+'+sorted[0].diff+' j ('+sorted[0].lit+')':'—')+'</b></div>'
+       +'<div>🚀 Avance max : <b>'+(sorted[sorted.length-1]&&sorted[sorted.length-1].diff<0?sorted[sorted.length-1].diff+' j ('+sorted[sorted.length-1].lit+')':'—')+'</b></div>'
+       +'</div></div></div>'
+     )
+     +section('Distribution des écarts (jours)',function(){
+       var bins={'≤-14':0,'-13→-7':0,'-6→0':0,'1→7':0,'8→14':0,'≥15':0};
+       delayData.forEach(function(r){ if(r.diff<=-14)bins['≤-14']++; else if(r.diff<=-7)bins['-13→-7']++; else if(r.diff<=0)bins['-6→0']++; else if(r.diff<=7)bins['1→7']++; else if(r.diff<=14)bins['8→14']++; else bins['≥15']++; });
+       var cols={'≤-14':'var(--ok)','-13→-7':'var(--ok)','-6→0':'#86efac','1→7':'var(--warn)','8→14':'var(--err)','≥15':'#7f1d1d'};
+       return '<div style="display:flex;justify-content:center">'+mkBars(Object.keys(bins).map(function(k){return {l:k,v:bins[k],c:cols[k]};}),400,140)+'</div>';
+     }())
+     +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">'
+     +section('⚠️ Plus grands retards','<div style="font-size:12px">'+(top5late.length?top5late.map(function(r){return '<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)"><span class="mono" style="font-weight:600">'+r.lit+'</span><span style="color:var(--err);font-weight:700">+'+r.diff+' j</span></div>';}).join(''):'<div style="color:var(--muted)">Aucun retard 🎉</div>')+'</div>')
+     +section('🚀 Plus grandes avances','<div style="font-size:12px">'+(top5early.length?top5early.map(function(r){return '<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)"><span class="mono" style="font-weight:600">'+r.lit+'</span><span style="color:var(--ok);font-weight:700">'+r.diff+' j</span></div>';}).join(''):'<div style="color:var(--muted)">—</div>')+'</div>')
+     +'</div>';
+   }},
+
+  // ── 3. LOTS ──
+  {id:'lots', title:'📦 Avancement par lot',
+   preview:function(){
+     var items=lotNums.map(function(lot){
+       var ld=data.filter(function(d){return d.lot==lot;}), ldel=ld.filter(delivered);
+       var pct=Math.round(ldel.length/ld.length*100);
+       var col=pct===100?'var(--ok)':pct>60?'var(--blue)':pct>30?'var(--warn)':'var(--err)';
+       return {l:'L'+lot,v:pct,c:col};
+     });
+     return '<div style="display:flex;justify-content:center;padding:4px 0">'+mkBars(items,260,110)+'</div>';
+   },
+   detail:function(){
+     var rows=lotNums.map(function(lot){
+       var ld=data.filter(function(d){return d.lot==lot;}), ldel=ld.filter(delivered);
+       var pct=Math.round(ldel.length/ld.length*100);
+       var km=ld.reduce(function(s,d){return s+(parseFloat(d.lineaire)||0);},0);
+       var kmDel=ldel.reduce(function(s,d){return s+(parseFloat(d.lineaire)||0);},0);
+       var col=pct===100?'var(--ok)':pct>60?'var(--blue)':pct>30?'var(--warn)':'var(--err)';
+       return {lot:lot,pct:pct,n:ldel.length,tot:ld.length,km:km,kmDel:kmDel,col:col};
+     });
+     var allDel=rows.filter(function(r){return r.pct===100;}).length;
+     return kpiRow([
+       {v:allDel+'/'+rows.length,l:'Lots 100% livrés',sub:'',c:'var(--ok)'},
+       {v:rows.reduce(function(s,r){return s+r.n;},0),l:'LITs livrées',sub:'sur '+total,c:'var(--blue)'},
+       {v:rows.reduce(function(s,r){return s+r.kmDel;},0).toFixed(1)+' km',l:'Linéaire livré',sub:'sur '+totalKm.toFixed(0)+' km',c:'var(--blue)'},
+       {v:rows.filter(function(r){return r.pct>0&&r.pct<100;}).length,l:'Lots en cours',sub:'',c:'var(--warn)'}
+     ])
+     +section('Avancement LITs par lot',
+       '<div style="display:flex;justify-content:center;margin-bottom:8px">'+mkBars(rows.map(function(r){return {l:'Lot '+r.lot,v:r.pct,c:r.col,sub:'%'};}),420,180)+'</div>'
+     )
+     +section('Détail par lot',
+       '<div style="display:flex;flex-direction:column;gap:10px">'
+       +rows.map(function(r){
+         return '<div style="background:var(--bg);border-radius:8px;padding:10px 14px">'
+           +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
+           +'<span style="font-weight:700">Lot '+r.lot+'</span>'
+           +'<span style="font-size:11px;color:var(--muted)">'+r.n+'/'+r.tot+' LITs · '+r.kmDel.toFixed(1)+'/'+r.km.toFixed(1)+' km</span>'
+           +'<span style="font-weight:800;color:'+r.col+';font-size:14px">'+r.pct+'%</span></div>'
+           +'<div style="background:var(--border);border-radius:4px;height:8px"><div style="background:'+r.col+';width:'+r.pct+'%;height:100%;border-radius:4px"></div></div>'
+           +'</div>';
+       }).join('')+'</div>'
+     );
+   }},
+
+  // ── 4. MENSUEL ──
+  {id:'monthly', title:'📆 Livraisons par mois',
+   preview:function(){
+     var items=months.slice(-8).map(function(m){return {l:m.slice(5),v:monthly[m].n,c:'var(--blue)'};});
+     return '<div style="display:flex;justify-content:center;padding:4px 0">'+mkBars(items,260,110)+'</div>';
+   },
+   detail:function(){
+     var bestM=months.reduce(function(b,m){return monthly[m].n>monthly[b].n?m:b;},months[0]||'');
+     var bestKm=months.reduce(function(b,m){return monthly[m].km>monthly[b].km?m:b;},months[0]||'');
+     var cumul=0, cumulKm=0;
+     return kpiRow([
+       {v:months.length,l:'Mois avec livraisons',sub:'',c:'var(--blue)'},
+       {v:bestM?(monthly[bestM].n+' LITs en '+bestM):'—',l:'Meilleur mois',sub:'',c:'var(--ok)'},
+       {v:months.length?Math.round(delCount/months.length*10)/10:0,l:'Moyenne / mois',sub:'LITs',c:'var(--blue)'},
+       {v:months.length?(delKm/months.length).toFixed(1):0,l:'Moyenne / mois',sub:'km',c:'var(--muted)'}
+     ])
+     +section('Livraisons par mois',
+       '<div style="display:flex;justify-content:center">'+mkBars(months.map(function(m){return {l:m.slice(5)+'/'+m.slice(2,4),v:monthly[m].n,c:'var(--blue)',sub:monthly[m].km.toFixed(1)+' km'};}),460,180)+'</div>'
+     )
+     +section('km livrés par mois',
+       '<div style="display:flex;justify-content:center">'+mkBars(months.map(function(m){return {l:m.slice(5)+'/'+m.slice(2,4),v:parseFloat(monthly[m].km.toFixed(1)),c:'var(--ok)'};}),460,140)+'</div>'
+     )
+     +section('Tableau récapitulatif',
+       '<table style="width:100%;font-size:12px;border-collapse:collapse">'
+       +'<thead><tr style="border-bottom:2px solid var(--border)">'
+       +'<th style="padding:7px;text-align:left">Mois</th><th style="padding:7px;text-align:right">LITs</th>'
+       +'<th style="padding:7px;text-align:right">km</th><th style="padding:7px;text-align:right">Cumulé LITs</th><th style="padding:7px;text-align:right">Cumulé km</th>'
+       +'</tr></thead><tbody>'
+       +months.map(function(m){
+         cumul+=monthly[m].n; cumulKm+=monthly[m].km;
+         return '<tr style="border-bottom:1px solid var(--border)">'
+           +'<td style="padding:6px;font-family:\'DM Mono\',monospace">'+m+'</td>'
+           +'<td style="padding:6px;text-align:right;font-weight:700">'+monthly[m].n+'</td>'
+           +'<td style="padding:6px;text-align:right;color:var(--muted)">'+monthly[m].km.toFixed(1)+'</td>'
+           +'<td style="padding:6px;text-align:right">'+cumul+'</td>'
+           +'<td style="padding:6px;text-align:right;color:var(--muted)">'+cumulKm.toFixed(1)+'</td>'
+           +'</tr>';
+       }).join('')+'</tbody></table>'
+     );
+   }},
+
+  // ── 5. PHASES ──
+  {id:'phases', title:'⚙️ Avancement phases',
+   preview:function(){
+     return '<div style="display:flex;justify-content:center;padding:4px 0">'+mkRadar(phDefs.map(function(p){return p.l;}),phVals,220)+'</div>';
+   },
+   detail:function(){
+     var rows=phDefs.map(function(ph,i){
+       var t=data.length*ph.k.length||1, done=0;
+       data.forEach(function(d){ph.k.forEach(function(k){if(d[k]==='OK')done++;});});
+       var pct=phVals[i];
+       var col=pct===100?'var(--ok)':pct>70?'var(--blue)':pct>40?'var(--warn)':'var(--err)';
+       return {l:ph.l,pct:pct,done:done,tot:t,steps:ph.k.length,col:col,keys:ph.k};
+     });
+     return section('Vue radar — progression par phase',
+       '<div style="display:flex;align-items:center;gap:24px;flex-wrap:wrap">'
+       +'<div style="flex:0 0 auto">'+mkRadar(rows.map(function(r){return r.l;}),rows.map(function(r){return r.pct;}),300)+'</div>'
+       +'<div style="flex:1;min-width:180px">'+mkLegend(rows.map(function(r){return {c:r.col,l:r.l,v:r.pct+'%',sub:r.done+'/'+r.tot+' étapes'};}))+'</div>'
+       +'</div>'
+     )
+     +section('Détail par phase',
+       rows.map(function(r){
+         var notOk=data.filter(function(d){ return r.keys.some(function(k){return d[k]!=='OK'&&d[k]!==null;}); }).length;
+         return '<div style="background:var(--bg);border-radius:8px;padding:12px 16px;margin-bottom:10px">'
+           +'<div style="display:flex;justify-content:space-between;margin-bottom:6px">'
+           +'<span style="font-weight:700;font-size:13px">'+r.l+'</span>'
+           +'<span style="font-size:11px;color:var(--muted)">'+r.steps+' étapes · '+r.done+'/'+r.tot+' OK</span>'
+           +'<span style="font-weight:800;color:'+r.col+';font-size:15px">'+r.pct+'%</span></div>'
+           +'<div style="background:var(--border);border-radius:5px;height:10px;overflow:hidden"><div style="background:'+r.col+';width:'+r.pct+'%;height:100%;border-radius:5px"></div></div>'
+           +(notOk?'<div style="font-size:11px;color:var(--muted);margin-top:5px">'+notOk+' LIT'+( notOk>1?'s':'')+' avec étapes non finalisées</div>':'')
+           +'</div>';
+       }).join('')
+     )
+     +section('Avancement détaillé',
+       '<div style="display:flex;justify-content:center">'+mkHBars(rows.map(function(r){return {l:r.l,v:r.pct,c:r.col,sub:'%'};}),420)+'</div>'
+     );
+   }},
+
+  // ── 6. LINÉAIRE ──
+  {id:'lineaire', title:'📏 Linéaire par lot',
+   preview:function(){
+     var cols=['var(--ok)','var(--blue)','var(--warn)','#a855f7','#06b6d4','#f97316','#ec4899','#84cc16'];
+     var segs=lotNums.map(function(lot,i){
+       var km=data.filter(function(d){return d.lot==lot;}).reduce(function(s,d){return s+(parseFloat(d.lineaire)||0);},0);
+       return {v:parseFloat(km.toFixed(2)),c:cols[i%cols.length],l:'Lot '+lot};
+     });
+     return '<div style="display:flex;justify-content:center;padding:8px 0">'+mkDonut(segs,150,'','km')+'</div>';
+   },
+   detail:function(){
+     var cols=['var(--ok)','var(--blue)','var(--warn)','#a855f7','#06b6d4','#f97316','#ec4899','#84cc16'];
+     var segs=lotNums.map(function(lot,i){
+       var ld=data.filter(function(d){return d.lot==lot;});
+       var km=ld.reduce(function(s,d){return s+(parseFloat(d.lineaire)||0);},0);
+       var kmDel=ld.filter(delivered).reduce(function(s,d){return s+(parseFloat(d.lineaire)||0);},0);
+       return {v:Math.round(km*10)/10,c:cols[i%cols.length],l:'Lot '+lot,kmDel:Math.round(kmDel*10)/10};
+     });
+     var total2=segs.reduce(function(s,sg){return s+sg.v;},0)||1;
+     var maxLit=lotNums.reduce(function(b,lot){var n=data.filter(function(d){return d.lot==lot;}).length; return n>data.filter(function(d){return d.lot==b;}).length?lot:b;},lotNums[0]);
+     return kpiRow([
+       {v:totalKm.toFixed(1)+' km',l:'Linéaire total',sub:total+' LITs',c:'var(--blue)'},
+       {v:delKm.toFixed(1)+' km',l:'Linéaire livré',sub:Math.round(delKm/totalKm*100)+'%',c:'var(--ok)'},
+       {v:(totalKm/total).toFixed(2)+' km',l:'Moyenne par LIT',sub:'',c:'var(--muted)'},
+       {v:'Lot '+maxLit,l:'Lot le plus long',sub:segs.find(function(s){return s.l==='Lot '+maxLit;})?(segs.find(function(s){return s.l==='Lot '+maxLit;}).v.toFixed(1)+' km'):'',c:'var(--blue)'}
+     ])
+     +section('Répartition du linéaire par lot',
+       '<div style="display:flex;align-items:center;gap:32px;flex-wrap:wrap">'
+       +'<div style="flex:0 0 auto">'+mkDonut(segs,300,'','km')+'</div>'
+       +'<div style="flex:1;min-width:180px">'+mkLegend(segs.map(function(s){return {c:s.c,l:s.l,v:s.v.toFixed(1)+' km',sub:'('+Math.round(s.v/total2*100)+'%)'};}))+'</div>'
+       +'</div>'
+     )
+     +section('Linéaire livré vs total par lot',
+       '<div style="display:flex;justify-content:center">'+mkBars(segs.map(function(sg){return {l:sg.l.replace('Lot ','L'),v:sg.v,c:sg.c,sub:'km'};}),420,160)+'</div>'
+     )
+     +section('Linéaire livré par lot',
+       '<div style="display:flex;justify-content:center">'+mkHBars(segs.map(function(sg){return {l:sg.l,v:sg.kmDel.toFixed(1),c:sg.c,sub:'km livrés / '+sg.v.toFixed(1)+' km'};}),420)+'</div>'
+     );
+   }}
+  ];
+
+  // ── Render preview grid ──
+  var grid = document.getElementById('stats-grid');
+  grid.innerHTML = '';
+  _statCards.forEach(function(card){
+    var div = document.createElement('div');
+    div.className = 'card stat-card';
+    div.innerHTML = '<div class="card-head"><div class="card-title">'+card.title+'</div>'
+      +'<span style="font-size:10px;color:var(--muted)">Voir le détail →</span></div>'
+      +'<div class="card-body" style="padding:8px 14px 12px">'+card.preview()+'</div>';
+    div.addEventListener('click', (function(id){ return function(){ openStatDetail(id); }; })(card.id));
+    grid.appendChild(div);
+  });
+}
+
+
+// ── STAT PANEL ──
+function openStatDetail(id){
+  var card = _statCards.find(function(c){return c.id===id;});
+  if(!card) return;
+  document.getElementById('stat-panel-title').textContent = card.title;
+  document.getElementById('stat-panel-body').innerHTML = card.detail();
+  document.getElementById('stat-panel-overlay').classList.add('open');
+  document.body.style.overflow = 'hidden';
+  setTimeout(attachStatTips, 60);
+}
+function closeStatPanel(){
+  document.getElementById('stat-panel-overlay').classList.remove('open');
+  document.body.style.overflow = '';
+}
+document.addEventListener('keydown', function(e){
+  if(e.key==='Escape') closeStatPanel();
+});
+
 // ── INIT ──
 (function(){
+  // If Firebase is unavailable, try loading from localStorage
+  if(!_fbAvailable){
+    try {
+      var local = localStorage.getItem('kadran_v5_local');
+      if(local){
+        var parsed = JSON.parse(local);
+        if(parsed.data && parsed.data.length) {
+          S.data = parsed.data;
+          if(parsed.settings) S.settings = parsed.settings;
+          if(parsed.deliveries) S.deliveries = parsed.deliveries;
+          if(parsed.reprises) S.reprises = parsed.reprises;
+          if(parsed.cadNotes !== undefined) S.cadNotes = parsed.cadNotes;
+          if(parsed.consignes) S.consignes = parsed.consignes;
+        }
+      }
+    } catch(e){}
+    showAS('offline');
+  }
   var saved = localStorage.getItem('k5_nav') || 'dashboard';
   var el = document.querySelector('[data-view="' + saved + '"]');
   nav(saved, el);
@@ -1705,5 +2442,20 @@ function exportCSV(){
   initTrigram();
 })();
 </script>
+
+<!-- STAT PANEL -->
+<div class="stat-panel-overlay" id="stat-panel-overlay">
+  <div class="stat-panel-backdrop" onclick="closeStatPanel()"></div>
+  <div class="stat-panel" id="stat-panel">
+    <div class="stat-panel-head">
+      <div class="stat-panel-title" id="stat-panel-title">Statistique</div>
+      <button class="stat-panel-close" onclick="closeStatPanel()">×</button>
+    </div>
+    <div class="stat-panel-body" id="stat-panel-body"></div>
+  </div>
+</div>
+<!-- SVG TOOLTIP -->
+<div class="svg-tip" id="svg-tip"></div>
+
 </body>
 </html>
