@@ -853,7 +853,7 @@ tr:hover td{background:var(--surf2);}
 <div class="autosave as-saved" id="autosave"><span id="as-icon">💾</span><span id="as-txt">Sauvegardé</span></div>
 
 <!-- TRIGRAMME OVERLAY -->
-<div class="trig-overlay" id="trig-overlay">
+<div class="trig-overlay hidden" id="trig-overlay">
   <div class="trig-box">
     <div class="trig-logo">
 <svg viewBox="0 0 220 150" width="220" height="150" xmlns="http://www.w3.org/2000/svg">
@@ -1075,8 +1075,11 @@ function confirmTrigram(){
   localStorage.setItem('k5_trigram', val);
   hideTrigram();
   updateUserBadge();
-  // Force render with current data (Firebase may still be loading)
-  _refreshAll();
+  // Activer la dernière vue et rendre le contenu
+  loadSettings();
+  var _saved = localStorage.getItem('k5_nav') || 'dashboard';
+  var _navEl = document.querySelector('[data-view="' + _saved + '"]');
+  nav(_saved, _navEl);
 }
 function changeTrigram(){
   document.getElementById('trig-inp').value = CURRENT_USER;
@@ -1521,7 +1524,7 @@ function renderGantt(){
   var lotF=document.getElementById('g-lot').value;
   var mode=document.getElementById('g-mode').value;
   var statusF=document.getElementById('g-status').value;
-  var todayP=gPct('2026-02-19');
+  var todayP=gPct(new Date().toISOString().slice(0,10));
 
   // Build sticky header
   var months=[{l:'Novembre 2025',s:'2025-11-01',e:'2025-11-30'},{l:'Décembre 2025',s:'2025-12-01',e:'2025-12-31'},{l:'Janvier 2026',s:'2026-01-01',e:'2026-01-31'},{l:'Février 2026',s:'2026-02-01',e:'2026-02-28'},{l:'Mars 2026',s:'2026-03-01',e:'2026-03-31'}];
@@ -1655,6 +1658,40 @@ function saveGanttEdit(lit){
   renderDashboard();
 }
 
+// ── TRI DES TABLEAUX ──
+var _sortState = {
+  lits:      {col:'lit',       dir:1},
+  livraison: {col:'planning',  dir:1},
+  phase:     {col:'lit',       dir:1},
+  historique:{col:'lit',       dir:1}
+};
+function sortBy(table,col){
+  var s=_sortState[table];
+  if(s.col===col) s.dir*=-1; else {s.col=col;s.dir=1;}
+  if(table==='lits')            renderLits();
+  else if(table==='livraison')  renderLivraison();
+  else if(table==='phase')      renderPhase(_curPhase);
+  else if(table==='historique') renderHistorique();
+}
+function _sortArr(arr,col,dir){
+  return arr.slice().sort(function(a,b){
+    var va=a[col],vb=b[col];
+    if(va==null) va=''; if(vb==null) vb='';
+    if(col==='lot'||col==='lineaire') return ((parseFloat(va)||0)-(parseFloat(vb)||0))*dir;
+    return String(va).localeCompare(String(vb),'fr')*dir;
+  });
+}
+function _th(table,col,label){
+  var s=_sortState[table];
+  var active=s.col===col;
+  var arrow=active?(s.dir===1?' ▲':' ▼'):'';
+  var bg=active
+    ?'cursor:pointer;user-select:none;white-space:nowrap;color:var(--blue);background:#eff6ff'
+    :'cursor:pointer;user-select:none;white-space:nowrap';
+  return '<th style="'+bg+'" onclick="sortBy(\''+table+'\',\''+col+'\')">'+label
+    +'<span style="font-size:9px;opacity:.7">'+arrow+'</span></th>';
+}
+
 // ── LIT TABLE ──
 function fillLitFilters(){
   var sel=document.getElementById('lit-lot');
@@ -1664,6 +1701,7 @@ function renderLits(){
   var search=document.getElementById('lit-search').value.toLowerCase();
   var lotF=document.getElementById('lit-lot').value;
   var stF=document.getElementById('lit-status').value;
+  var s=_sortState.lits;
   var f=S.data.filter(function(d){
     if(search&&!d.lit.toLowerCase().includes(search)) return false;
     if(lotF&&d.lot!=lotF) return false;
@@ -1672,22 +1710,34 @@ function renderLits(){
     if(stF==='late'&&(delivered(d)||daysTo(d.planning)>=0)) return false;
     return true;
   });
-  document.getElementById('lits-body').innerHTML=f.map(function(d){
+  f=_sortArr(f,s.col,s.dir);
+  var _tb=document.getElementById('lits-body');
+  if(!_tb) return;
+  var _tr=_tb.closest('table').querySelector('thead tr');
+  if(_tr) _tr.innerHTML=
+     _th('lits','lit','LIT')
+    +_th('lits','lot','LOT')
+    +_th('lits','lineaire','Linéaire')
+    +_th('lits','planning','Planning')
+    +'<th>Statut</th>'
+    +_th('lits','date_livraison','Date livraison')
+    +'<th>Contrôle</th><th>Reprises</th><th></th>';
+  _tb.innerHTML=f.map(function(d){
     var dd=daysTo(d.planning);
     var urg=!delivered(d)&&dd!==null&&dd<=3;
-    var daysTxt=dd!==null&&!delivered(d)?'<br><small style="color:'+(dd<0?'var(--err)':dd<=7?'var(--warn)':'var(--muted)')+'">J'+(dd>=0?'+':'')+dd+'</small>':'';
+    var dt=dd!==null&&!delivered(d)?'<br><small style="color:'+(dd<0?'var(--err)':dd<=7?'var(--warn)':'var(--muted)')+'">J'+(dd>=0?'+':'')+dd+'</small>':'';
     var rc=reprOf(d.lit).length;
     var lE=d.lit.replace(/'/g,"\\'");
     return '<tr'+(urg?' style="background:var(--err-bg)"':'')+'>'
-      +'<td><span class="mono" style="cursor:pointer;color:var(--red);font-weight:700" onclick="openLitModal(\''+lE+'\')">'+d.lit+'</span></td>'
+      +'<td><span class="mono" style="cursor:pointer;color:var(--red);font-weight:700" onclick="openLitModal(\''+lE+'\')">'  +d.lit+'</span></td>'
       +'<td><span class="badge b-neu">Lot '+d.lot+'</span></td>'
       +'<td>'+d.lineaire+' km</td>'
-      +'<td><span class="mono">'+(d.planning||'—')+'</span>'+daysTxt+'</td>'
+      +'<td><span class="mono">'+(d.planning||'—')+'</span>'+dt+'</td>'
       +'<td>'+sBadge(d)+'</td>'
       +'<td class="mono">'+(d.date_livraison||'—')+'</td>'
-      +'<td>'      +'<td>'+ctrlLitBadge(d.lit)+'</td>'
-+(rc?'<span class="badge b-warn">'+rc+' ↺</span>':'—')+'</td>'
-      +'<td><button class="btn btn-secondary btn-sm" onclick="openLitModal(\''+lE+'\')">Détail</button></td>'
+      +'<td>'+ctrlLitBadge(d.lit)+'</td>'
+      +'<td>'+(rc?'<span class="badge b-warn">'+rc+' ↺</span>':'—')+'</td>'
+      +'<td><button class="btn btn-secondary btn-sm" onclick="openLitModal(\''+lE+'\')">Édit</button></td>'
       +'</tr>';
   }).join('');
 }
@@ -2001,11 +2051,15 @@ function renderPhase(ph){
   var countEl=document.getElementById('ph-count');
   if(countEl) countEl.textContent=filtered.length+' / '+S.data.length+' LIT'+(filtered.length>1?'s':'');
 
-  document.getElementById('ph-head').innerHTML='<tr>'+cfg.cols.map(function(c){return '<th>'+c+'</th>';}).join('')+'</tr>';
+  var _sph=_sortState.phase;
+  document.getElementById('ph-head').innerHTML='<tr>'+cfg.cols.map(function(col,i){
+    return _th('phase', cfg.keys[i]||cfg.keys[0], col);
+  }).join('')+'</tr>';
   if(!filtered.length){
     document.getElementById('ph-body').innerHTML='<tr><td colspan="'+cfg.cols.length+'" style="text-align:center;color:var(--muted);padding:18px">Aucun résultat</td></tr>';
     return;
   }
+  filtered=_sortArr(filtered,_sph.col,_sph.dir);
   document.getElementById('ph-body').innerHTML=filtered.map(function(d){
     var lE=d.lit.replace(/'/g,"\\'");
     return '<tr>'+cfg.keys.map(function(k,i){
@@ -2025,24 +2079,39 @@ function fillLivFilters(){
 function renderLivraison(){
   var lotF=document.getElementById('liv-lot').value;
   var stF=document.getElementById('liv-status').value;
+  var s=_sortState.livraison;
   var f=S.data.filter(function(d){
     if(lotF&&d.lot!=lotF) return false;
     if(stF==='ok'&&!delivered(d)) return false;
     if(stF==='pend'&&delivered(d)) return false;
     return true;
   });
-  document.getElementById('liv-body').innerHTML=f.map(function(d){
+  f=_sortArr(f,s.col,s.dir);
+  var _tb=document.getElementById('liv-body');
+  if(!_tb) return;
+  var _tr=_tb.closest('table').querySelector('thead tr');
+  if(_tr) _tr.innerHTML=
+     _th('livraison','lit','LIT')
+    +_th('livraison','lot','LOT')
+    +_th('livraison','lineaire','Linéaire')
+    +_th('livraison','planning','Planning')
+    +_th('livraison','date_livraison','Date livraison')
+    +'<th>Statut</th><th>Contrôle</th><th>Modifier date</th>';
+  _tb.innerHTML=f.map(function(d){
     var dl=d.date_livraison;
-    var b=dl&&/^\d{4}/.test(String(dl))?'<span class="badge b-ok">✓ '+dl+'</span>':(dl==='NON-LIVRÉ'?'<span class="badge b-err">✗</span>':'<span class="badge b-neu">En attente</span>');
+    var b=dl&&/^\d{4}/.test(String(dl))? '<span class="badge b-ok">✓ '+dl+'</span>'
+          :(dl==='NON-LIVRÉ'?'<span class="badge b-err">✗</span>':'<span class="badge b-neu">En attente</span>');
     var lE=d.lit.replace(/'/g,"\\'");
     return '<tr>'
-      +'<td><span class="mono" style="cursor:pointer;color:var(--red);font-weight:700" onclick="openLitModal(\''+lE+'\')">'+d.lit+'</span></td>'
+      +'<td><span class="mono" style="cursor:pointer;color:var(--red);font-weight:700" onclick="openLitModal(\''+lE+'\')">'  +d.lit+'</span></td>'
       +'<td>Lot '+d.lot+'</td><td>'+d.lineaire+' km</td>'
       +'<td class="mono">'+(d.planning||'—')+'</td>'
       +'<td class="mono">'+(dl||'—')+'</td>'
       +'<td>'+b+'</td>'
       +'<td>'+ctrlLitBadge(d.lit)+'</td>'
-      +'<td><input type="date" style="padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:11px;font-family:inherit" value="'+(dl&&/^\d{4}/.test(dl)?dl:'')+'" onchange="updateDelDate(\''+lE+'\',this.value)"></td>'
+      +'<td><input type="date" style="padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:11px;font-family:inherit"'
+         +' value="'+(dl&&/^\d{4}/.test(dl)?dl:'')+'"'
+         +' onchange="updateDelDate(\''+lE+'\',this.value)"></td>'
       +'</tr>';
   }).join('');
 }
@@ -2089,15 +2158,29 @@ function copyMail(){navigator.clipboard.writeText(document.getElementById('mail-
 // ── HISTORIQUE REPRISES ──
 function renderHistorique(){
   var search=(document.getElementById('hist-search').value||'').toLowerCase();
+  var s=_sortState.historique;
   var byLit={};
   S.reprises.forEach(function(r){
     if(search&&!r.lit.toLowerCase().includes(search)) return;
     if(!byLit[r.lit]) byLit[r.lit]=[];
     byLit[r.lit].push(r);
   });
-  var lits=Object.keys(byLit).sort();
-  if(!lits.length){document.getElementById('hist-body').innerHTML='<p style="color:var(--muted)">Aucune reprise enregistrée.</p>';return;}
-  document.getElementById('hist-body').innerHTML=lits.map(function(lit){
+  var arr=Object.keys(byLit).map(function(lit){
+    var d=S.data.find(function(x){return x.lit===lit;})||{};
+    return {lit:lit,lot:d.lot||0,lineaire:d.lineaire||0,reprises:byLit[lit].length};
+  });
+  arr=_sortArr(arr,s.col,s.dir);
+  var sortBar='<div style="display:flex;gap:6px;align-items:center;margin-bottom:10px;flex-wrap:wrap">'
+    +'<span style="font-size:11px;color:var(--muted);font-weight:600">Trier :</span>'
+    +[['lit','LIT'],['lot','Lot'],['lineaire','Linéaire'],['reprises','Nb reprises']].map(function(p){
+      var a=s.col===p[0];
+      return '<button onclick="sortBy(\'historique\',\''+p[0]+'\')" style="padding:3px 10px;border:1px solid '+(a?'var(--blue)':'var(--border)')+';border-radius:5px;background:'+(a?'#eff6ff':'#fff')+';color:'+(a?'var(--blue)':'var(--txt)')+';font-size:11px;cursor:pointer;font-family:inherit">'+p[1]+(a?(s.dir===1?' ▲':' ▼'):'')+'</button>';
+    }).join('')+'</div>';
+  var hb=document.getElementById('hist-body');
+  if(!hb) return;
+  if(!arr.length){hb.innerHTML=sortBar+'<p style="color:var(--muted)">Aucune reprise enregistrée.</p>';return;}
+  hb.innerHTML=sortBar+arr.map(function(item){
+    var lit=item.lit;
     var entries=byLit[lit];
     var d=S.data.find(function(x){return x.lit===lit;});
     var lE=lit.replace(/'/g,"\\'");
@@ -2107,7 +2190,7 @@ function renderHistorique(){
       +'<div style="display:flex;gap:6px;align-items:center">'
       +'<span class="badge b-warn">'+versions+' version'+(versions>1?'s':'')+'</span>'
       +'<button class="btn btn-secondary btn-sm" onclick="addRepriseFor(\''+lE+'\')">+ Ajouter</button>'
-      +'<button class="btn btn-secondary btn-sm" onclick="openLitModal(\''+lE+'\')">Fiche LIT</button>'
+      +'<button class="btn btn-secondary btn-sm" onclick="openLitModal(\''+lE+'\')">Édit</button>'
       +'</div></div>'
       +entries.map(function(r,i){
         var done=r.date_reprise&&r.date_reprise!=='-';
@@ -2120,8 +2203,7 @@ function renderHistorique(){
           +'<span class="badge '+(done?'b-ok':'b-warn')+'">'+(done?'✓ Terminé':'⏳ En attente')+'</span>'
           +'<button onclick="removeReprise(\''+lE+'\','+i+')" style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:13px" title="Supprimer">×</button>'
           +'</div></div>';
-      }).join('')
-      +'</div>';
+      }).join('')+'</div>';
   }).join('');
 }
 function openAddReprise(){
@@ -3758,44 +3840,42 @@ function ctrlExportReport(){
 
 // ── INIT ──
 (function(){
-  try {
-  // One-time clear of cached trigram (force re-identification)
-  if(!localStorage.getItem('k5_trig_cleared_v5')){
-    localStorage.removeItem('k5_trigram');
-    localStorage.setItem('k5_trig_cleared_v5','1');
-  }
-  // If Firebase is unavailable, try loading from localStorage
-  if(!_fbAvailable){
+  // project-screen est après la balise script, DOM pas encore prêt
+  // → DOMContentLoaded garantit que proj-cards-grid existe
+  function _doInit(){
     try {
-      var local = localStorage.getItem('kadran_v5_local');
-      if(local){
-        var parsed = JSON.parse(local);
-        if(parsed.data && parsed.data.length) {
-          S.data = parsed.data;
-          if(parsed.settings) S.settings = parsed.settings;
-          if(parsed.deliveries) S.deliveries = parsed.deliveries;
-          if(parsed.reprises) S.reprises = parsed.reprises;
-          if(parsed.cadNotes !== undefined) S.cadNotes = parsed.cadNotes;
-          if(parsed.consignes) S.consignes = parsed.consignes;
-        }
+      // One-time clear of cached trigram
+      if(!localStorage.getItem('k5_trig_cleared_v5')){
+        localStorage.removeItem('k5_trigram');
+        localStorage.setItem('k5_trig_cleared_v5','1');
       }
-    } catch(e){}
-    showAS('offline');
+      // Si Firebase indisponible, charger depuis localStorage
+      if(!_fbAvailable){
+        try {
+          var local = localStorage.getItem('kadran_v5_local');
+          if(local){
+            var parsed = JSON.parse(local);
+            if(parsed.data && parsed.data.length) {
+              S.data = parsed.data;
+              if(parsed.settings) S.settings = parsed.settings;
+              if(parsed.deliveries) S.deliveries = parsed.deliveries;
+              if(parsed.reprises) S.reprises = parsed.reprises;
+              if(parsed.cadNotes !== undefined) S.cadNotes = parsed.cadNotes;
+              if(parsed.consignes) S.consignes = parsed.consignes;
+            }
+          }
+        } catch(e){}
+        showAS('offline');
+      }
+      loadSavedProjects();
+      renderProjectScreen();
+    } catch(e){ console.error('INIT error:', e); }
   }
-  var saved = localStorage.getItem('k5_nav') || 'dashboard';
-  var el = document.querySelector('[data-view="' + saved + '"]');
-  nav(saved, el);
-  loadSettings();
-  // renderProjectScreen called after DOM is ready
-  } catch(e){ console.error('INIT error:', e); }
-  // Render project screen once DOM is fully available
-  document.addEventListener('DOMContentLoaded', function(){
-    renderProjectScreen();
-  });
-  // If DOMContentLoaded already fired (script at end of body), call directly
-  loadSavedProjects();
-  if(document.readyState === 'interactive' || document.readyState === 'complete'){
-    renderProjectScreen();
+  // Attendre que le DOM soit complet (project-screen est hors du bloc script)
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', _doInit);
+  } else {
+    _doInit();
   }
 })();
 </script>
