@@ -1112,16 +1112,28 @@ var PROJECTS = [];
 var ACTIVE_PROJECT = null;
 var READ_ONLY = false;
 
-var firebaseConfig = {}; // No default project
+var firebaseConfig = {};
 var _fbAvailable = (typeof firebase !== 'undefined');
 var DB_REF = null;
+var db = null;
 var _fbLoaded = false;
 var _localInit = false;
 
-if(_fbAvailable){
+// Pré-charger les projets depuis localStorage pour récupérer la vraie config Firebase
+// avant d'initialiser Firebase (évite l'init avec config vide)
+(function(){
+  try{
+    var _pre=JSON.parse(localStorage.getItem('kadran_projects')||'[]');
+    if(_pre.length && _pre[0] && _pre[0].firebaseConfig && _pre[0].firebaseConfig.apiKey){
+      firebaseConfig = _pre[0].firebaseConfig;
+    }
+  }catch(e){}
+})();
+
+if(_fbAvailable && firebaseConfig.apiKey){
   try {
     firebase.initializeApp(firebaseConfig);
-    var db = firebase.database();
+    db = firebase.database();
     DB_REF = db.ref('kadran_v5');
   } catch(e) {
     console.warn('Firebase init failed:', e);
@@ -2663,8 +2675,8 @@ function renderAcqRappel(){
 var _acqDraft = {
   date: new Date().toISOString().split('T')[0],
   session: '', debut: '', fin: '', comment: '', tpsVol: '—',
-  atmoAlt: null, atmoTemp: null, atmoHum: null, atmoPress: null,
-  atmoKp: null, atmoLat: null, atmoLon: null, atmoFetching: false
+  atmoAlt: '', atmoTemp: '', atmoHum: '', atmoPress: '',
+  atmoKp: '', atmoLat: null, atmoLon: null, atmoFetching: false
 };
 
 var _chrono = {
@@ -2690,6 +2702,16 @@ function startChrono(){
   if(_chrono.paused){
     _chrono.paused=false; _chrono.startTs=Date.now();
   } else if(!_chrono.running){
+    // ── Alerte Kp si valeur connue et dégradée ──
+    var _kpCheck=parseFloat(_acqDraft.atmoKp);
+    if(_acqDraft.atmoKp&&!isNaN(_kpCheck)&&_kpCheck>=4){
+      var _kpMsg=_kpCheck>=5
+        ?'🔴 ACTIVITÉ GÉOMAGNÉTIQUE ÉLEVÉE\n\nIndice Kp actuel : '+_acqDraft.atmoKp
+          +'\n\nDes perturbations ionosphériques significatives sont attendues.\nLa précision GNSS/trajectoire peut être fortement dégradée.\n\nLancer l\'acquisition quand même ?'
+        :'🟠 PERTURBATION GÉOMAGNÉTIQUE MODÉRÉE\n\nIndice Kp actuel : '+_acqDraft.atmoKp
+          +'\n\nUne dégradation possible de la précision GNSS est attendue.\nUne vérification soigneuse des trajectoires PPK est recommandée.\n\nLancer l\'acquisition quand même ?';
+      if(!confirm(_kpMsg)) return;
+    }
     _chrono.running=true; _chrono.paused=false;
     _chrono.startTs=Date.now(); _chrono.elapsed=0;
     _chrono.dateFin=''; _acqDraft.fin='';
@@ -2740,8 +2762,8 @@ function resetChrono(){
   if(_chrono.intervalId){clearInterval(_chrono.intervalId);_chrono.intervalId=null;}
   _chrono={running:false,paused:false,startTs:null,elapsed:0,intervalId:null,dateDebut:'',dateFin:''};
   _acqDraft.debut=''; _acqDraft.fin=''; _acqDraft.tpsVol='—';
-  _acqDraft.atmoAlt=null; _acqDraft.atmoTemp=null; _acqDraft.atmoHum=null;
-  _acqDraft.atmoPress=null; _acqDraft.atmoKp=null; _acqDraft.atmoLat=null;
+  _acqDraft.atmoAlt=''; _acqDraft.atmoTemp=''; _acqDraft.atmoHum='';
+  _acqDraft.atmoPress=''; _acqDraft.atmoKp=''; _acqDraft.atmoLat=null;
   _acqDraft.atmoLon=null; _acqDraft.atmoFetching=false;
   var el=document.getElementById('acq-chrono-time'); if(el) el.textContent='00:00:00';
   var fi=document.getElementById('acq-debut'); if(fi) fi.value='';
@@ -2802,9 +2824,7 @@ function renderAcqNouveauVol(){
     +'<div id="acq-tps-vol" style="font-size:18px;font-weight:700;font-family:monospace;padding:4px 0;color:var(--txt)">'+d.tpsVol+'</div>'
     +'</div>'
     // Conditions atmo (rempli automatiquement au Début)
-    +'<div id="form-atmo-section">'
-    +(d.atmoFetching?'<div style="font-size:11px;color:var(--muted);padding:6px 0;font-style:italic">⟳ Récupération des conditions atmosphériques…</div>':'')
-    +'</div>'
+    +'<div id="form-atmo-section"></div>'
 
     +'<div class="fi-group" style="margin-bottom:18px">'
     +'<div class="fi-lbl">Commentaire <span style="color:var(--muted);font-size:10px">(optionnel)</span></div>'
@@ -2843,7 +2863,7 @@ function renderAcqNouveauVol(){
   }
   if(_chrono.running||_chrono.elapsed){ _chronoTick(); }
   // Restore atmo display if already fetched
-  if(_acqDraft.atmoTemp!==null||_acqDraft.atmoFetching) _updateFormAtmoDisplay();
+  _updateFormAtmoDisplay();
 }
 
 function saveAcqFlight(){
@@ -2923,24 +2943,92 @@ function renderAcqHistorique(){
   var logs=(S.flightLogs||[]).slice().sort(function(a,b){return (b.date||'').localeCompare(a.date||'');});
   var tbody=logs.length ? logs.map(function(l){
     var idE=l.id.replace(/'/g,"\\'");
-    return '<tr>'
+    var hasAtmo=l.atmoTemp||l.atmoPress||l.atmoKp;
+    var kpBadge='';
+    if(l.atmoKp){var k=parseFloat(l.atmoKp);kpBadge=k<4?' ✅':k<5?' 🟠':' 🔴';}
+    return '<tr style="cursor:pointer" onclick="openFlightLogDetail(\''+idE+'\')" title="Voir le détail">'
       +'<td class="mono" style="white-space:nowrap;font-weight:600">'+(l.date||'—')+'</td>'
       +'<td><span style="background:var(--surf2);padding:2px 8px;border-radius:10px;font-size:11px;font-family:monospace">'+(l.session||'—')+'</span></td>'
       +'<td style="font-family:monospace;font-size:11px;color:var(--muted)">'+(l.tpsVol||'—')+'</td>'
-      +'<td style="color:var(--muted);font-size:11px">'+(l.notes||'—')+'</td>'
-      +'<td style="text-align:right;white-space:nowrap">'
+      +'<td style="font-size:11px;color:var(--muted)">'+(hasAtmo?'🌡️ '+(l.atmoTemp||'?')+'°C · 🔵 '+(l.atmoPress||'?')+'mb · 🛰️ '+(l.atmoKp||'?')+kpBadge:'—')+'</td>'
+      +'<td style="color:var(--muted);font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(l.notes||'—')+'</td>'
+      +'<td style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()">'
       +'<button onclick="deleteAcqLog(\''+idE+'\')" style="border:none;background:none;cursor:pointer;color:var(--err);font-size:13px;padding:2px 5px" title="Supprimer">🗑</button>'
       +'</td>'
       +'</tr>';
-  }).join('') : '<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:28px;font-size:12px">Aucun vol enregistré</td></tr>';
+  }).join('') : '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:28px;font-size:12px">Aucun vol enregistré</td></tr>';
 
   document.getElementById('acq-pane-historique').innerHTML=
     '<div class="card"><div class="card-body" style="padding:0">'
     +'<div class="tbl-wrap"><table>'
-    +'<thead><tr><th>Date</th><th>Session</th><th>Durée</th><th>Commentaire</th><th style="width:50px"></th></tr></thead>'
+    +'<thead><tr><th>Date</th><th>Session</th><th>Durée</th><th>Conditions</th><th>Commentaire</th><th style="width:46px"></th></tr></thead>'
     +'<tbody>'+tbody+'</tbody>'
     +'</table></div>'
     +'</div></div>';
+}
+
+function openFlightLogDetail(id){
+  var l=(S.flightLogs||[]).find(function(x){return x.id===id;});
+  if(!l) return;
+
+  function row(label,val,mono){
+    if(!val&&val!==0) return '';
+    return '<div style="display:flex;align-items:baseline;gap:8px;padding:5px 0;border-bottom:0.5px solid var(--border)">'
+      +'<div style="font-size:11px;color:var(--muted);min-width:150px;flex-shrink:0">'+label+'</div>'
+      +'<div style="font-size:12px;'+(mono?'font-family:monospace;':'')+'color:var(--txt)">'+val+'</div>'
+      +'</div>';
+  }
+
+  function secTitle(t){
+    return '<div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin:14px 0 6px;display:flex;align-items:center;gap:8px">'+t+'<span style="flex:1;height:0.5px;background:var(--border)"></span></div>';
+  }
+
+  function kpLabel(k){
+    var f=parseFloat(k);
+    if(isNaN(f)) return k;
+    if(f<4) return k+' <span style="color:#15803d">✅ Favorable</span>';
+    if(f<5) return k+' <span style="color:#c2410c">🟠 Modéré</span>';
+    return k+' <span style="color:#b91c1c">🔴 Élevé</span>';
+  }
+
+  var html='';
+
+  // Informations générales
+  html+=secTitle('Informations générales');
+  html+=row('Date du vol',l.date,true);
+  html+=row('Session',l.session,true);
+  html+=row('Opérateur',l.operator,false);
+  html+=row('Enregistré par',l.createdBy+(l.createdAt?' · '+l.createdAt:''),false);
+  if(l.updatedBy) html+=row('Modifié par',l.updatedBy+(l.updatedAt?' · '+l.updatedAt:''),false);
+
+  // Horaires
+  html+=secTitle('Horaires');
+  html+=row('Début',l.dateDebut,true);
+  html+=row('Fin',l.dateFin,true);
+  html+=row('Durée',l.tpsVol,true);
+
+  // Conditions atmosphériques
+  var hasAtmo=l.atmoTemp||l.atmoAlt||l.atmoPress||l.atmoHum||l.atmoKp;
+  if(hasAtmo){
+    html+=secTitle('Conditions atmosphériques');
+    if(l.atmoLat&&l.atmoLon) html+=row('Position mesure',parseFloat(l.atmoLat).toFixed(4)+'°N, '+parseFloat(l.atmoLon).toFixed(4)+'°E',true);
+    html+=row('Altitude',l.atmoAlt?l.atmoAlt+' m':'',true);
+    html+=row('Température',l.atmoTemp?l.atmoTemp+' °C':'',true);
+    html+=row('Humidité',l.atmoHum?l.atmoHum+' %':'',true);
+    html+=row('Pression',l.atmoPress?l.atmoPress+' mbar':'',true);
+    if(l.atmoKp) html+=row('Indice Kp','<span style="font-family:monospace">'+kpLabel(l.atmoKp)+'</span>',false);
+  }
+
+  // Commentaire
+  if(l.notes&&l.notes.trim()){
+    html+=secTitle('Commentaire');
+    html+='<div style="font-size:12px;color:var(--txt);padding:8px 10px;background:var(--surf2);border-radius:6px;white-space:pre-wrap">'+l.notes.replace(/</g,'&lt;')+'</div>';
+  }
+
+  document.getElementById('modal-title').textContent=l.session||'Détail du vol';
+  document.getElementById('modal-body').innerHTML=html;
+  document.getElementById('modal-box').className='modal';
+  document.getElementById('modal-bg').classList.add('open');
 }
 
 function deleteAcqLog(id){
@@ -3081,11 +3169,11 @@ function _fetchFormAtmo(){
     var p2=fetch('https://services.swpc.noaa.gov/text/3-day-forecast.txt').then(function(r){return r.text();});
     Promise.all([p1,p2]).then(function(res){
       var meteo=res[0],kpTxt=res[1];
-      _acqDraft.atmoTemp=meteo.current?parseFloat(meteo.current.temperature_2m).toFixed(1):null;
-      _acqDraft.atmoHum=meteo.current?Math.round(meteo.current.relative_humidity_2m):null;
-      _acqDraft.atmoPress=meteo.current?Math.round(meteo.current.surface_pressure):null;
-      _acqDraft.atmoAlt=gpsAlt!=null?Math.round(gpsAlt):Math.round(meteo.elevation||0);
-      _acqDraft.atmoKp=_parseCurrentKp(kpTxt);
+      _acqDraft.atmoTemp=meteo.current?parseFloat(meteo.current.temperature_2m).toFixed(1):'';
+      _acqDraft.atmoHum=meteo.current?String(Math.round(meteo.current.relative_humidity_2m)):'';
+      _acqDraft.atmoPress=meteo.current?String(Math.round(meteo.current.surface_pressure)):'';
+      _acqDraft.atmoAlt=gpsAlt!=null?String(Math.round(gpsAlt)):String(Math.round(meteo.elevation||0));
+      var kpVal=_parseCurrentKp(kpTxt); _acqDraft.atmoKp=kpVal!==null?String(kpVal):'';
       _acqDraft.atmoFetching=false;
       _updateFormAtmoDisplay();
     }).catch(function(){_acqDraft.atmoFetching=false;_updateFormAtmoDisplay();});
@@ -3124,34 +3212,42 @@ function _parseCurrentKp(txt){
 function _updateFormAtmoDisplay(){
   var el=document.getElementById('form-atmo-section'); if(!el) return;
   var d=_acqDraft;
-  if(d.atmoFetching){
-    el.innerHTML='<div style="font-size:11px;color:var(--muted);padding:6px 0;font-style:italic">⟳ Récupération des conditions atmosphériques…</div>';
-    return;
+  var loading=d.atmoFetching;
+  var posStr=d.atmoLat&&d.atmoLon?' <span style="font-size:9px;font-weight:400;color:var(--muted)">· '+parseFloat(d.atmoLat).toFixed(3)+'°N, '+parseFloat(d.atmoLon).toFixed(3)+'°E</span>':'';
+
+  function fi(key,unit){
+    var val=String(d[key]||'');
+    return '<div style="display:flex;align-items:center;border:0.5px solid var(--border);border-radius:6px;overflow:hidden;background:var(--surface)">'
+      +'<input type="text" style="border:none;background:transparent;flex:1;padding:5px 7px;font-size:12px;font-family:monospace;outline:none;min-width:0;color:var(--txt)" value="'+val.replace(/"/g,'&quot;')+'" placeholder="—" onchange="_acqDraft.'+key+'=this.value.trim()">'
+      +'<span style="padding:0 7px;font-size:10px;color:var(--muted);border-left:0.5px solid var(--border);background:var(--surf2);font-family:monospace;white-space:nowrap;flex-shrink:0">'+unit+'</span>'
+      +'</div>';
   }
-  if(d.atmoTemp===null&&!d.atmoFetching) return; // nothing yet
-  function kpStyle(k){
-    if(k===null) return '';
-    if(k<4) return 'color:#15803d;font-weight:700';
-    if(k<5) return 'color:#c2410c;font-weight:700';
-    return 'color:#b91c1c;font-weight:700';
+
+  function kpBadge(){
+    var k=parseFloat(d.atmoKp);
+    if(!d.atmoKp||isNaN(k)) return '';
+    if(k<4) return ' <span style="color:#15803d;font-size:10px">✅</span>';
+    if(k<5) return ' <span style="color:#c2410c;font-size:10px">🟠</span>';
+    return ' <span style="color:#b91c1c;font-size:10px">🔴</span>';
   }
-  function kpLabel(k){
-    if(k===null) return '—';
-    if(k<4) return k.toFixed(2)+' ✅';
-    if(k<5) return k.toFixed(2)+' 🟠';
-    return k.toFixed(2)+' 🔴';
-  }
+
   el.innerHTML=
-    '<div style="background:var(--surf2);border-radius:8px;padding:10px 14px;margin-top:4px">'
-    +'<div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Conditions au départ'
-    +(d.atmoLat?' <span style="font-size:9px;font-weight:400">· '+parseFloat(d.atmoLat).toFixed(3)+'°N, '+parseFloat(d.atmoLon).toFixed(3)+'°E</span>':'')
+    '<div style="border:0.5px solid var(--border);border-radius:8px;padding:10px 14px;margin-top:4px;background:var(--surf2)">'
+    +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">'
+    +'<div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Conditions atmosphériques'+posStr+'</div>'
+    +'<button onclick="_fetchFormAtmo()" '+(loading?'disabled style="opacity:.5"':'')+' class="btn btn-secondary btn-sm">'+( loading?'⟳ Chargement…':'⟳ Actualiser')+'</button>'
     +'</div>'
-    +'<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px">'
-    +'<div style="text-align:center"><div style="font-size:16px">⛰️</div><div style="font-size:9px;color:var(--muted)">Altitude</div><div style="font-size:13px;font-weight:700;font-family:monospace">'+(d.atmoAlt!==null?d.atmoAlt:'—')+'<span style="font-size:9px;font-weight:400"> m</span></div></div>'
-    +'<div style="text-align:center"><div style="font-size:16px">🌡️</div><div style="font-size:9px;color:var(--muted)">Température</div><div style="font-size:13px;font-weight:700;font-family:monospace">'+(d.atmoTemp!==null?d.atmoTemp:'—')+'<span style="font-size:9px;font-weight:400"> °C</span></div></div>'
-    +'<div style="text-align:center"><div style="font-size:16px">💧</div><div style="font-size:9px;color:var(--muted)">Humidité</div><div style="font-size:13px;font-weight:700;font-family:monospace">'+(d.atmoHum!==null?d.atmoHum:'—')+'<span style="font-size:9px;font-weight:400"> %</span></div></div>'
-    +'<div style="text-align:center"><div style="font-size:16px">🔵</div><div style="font-size:9px;color:var(--muted)">Pression</div><div style="font-size:13px;font-weight:700;font-family:monospace">'+(d.atmoPress!==null?d.atmoPress:'—')+'<span style="font-size:9px;font-weight:400"> mbar</span></div></div>'
-    +'<div style="text-align:center"><div style="font-size:16px">🛰️</div><div style="font-size:9px;color:var(--muted)">Indice Kp</div><div style="font-size:13px;font-family:monospace;'+kpStyle(d.atmoKp)+'">'+kpLabel(d.atmoKp)+'</div></div>'
+    +'<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px">'
+    // Altitude
+    +'<div class="fi-group"><div class="fi-lbl">⛰️ Altitude</div>'+fi('atmoAlt','m')+'</div>'
+    // Température
+    +'<div class="fi-group"><div class="fi-lbl">🌡️ Température</div>'+fi('atmoTemp','°C')+'</div>'
+    // Humidité
+    +'<div class="fi-group"><div class="fi-lbl">💧 Humidité</div>'+fi('atmoHum','%')+'</div>'
+    // Pression
+    +'<div class="fi-group"><div class="fi-lbl">🔵 Pression</div>'+fi('atmoPress','mbar')+'</div>'
+    // Kp
+    +'<div class="fi-group"><div class="fi-lbl">🛰️ Indice Kp'+kpBadge()+'</div>'+fi('atmoKp','Kp')+'</div>'
     +'</div>'
     +'</div>';
 }
@@ -3261,6 +3357,8 @@ function _renderKpInto(txt, pane){
       +'</tr>';
   }).join('');
 
+
+
   // Compute project center from _dataBbox (L93 coords → WGS84)
   var _ctr=(function(){
     try{
@@ -3268,7 +3366,6 @@ function _renderKpInto(txt, pane){
         var cx93=(_dataBbox.minX+_dataBbox.maxX)/2;
         var cy93=(_dataBbox.minY+_dataBbox.maxY)/2;
         var wgs=l93ToWgs84(cx93,cy93);
-        // Estimate zoom from L93 extent (degrees-ish)
         var spanX=_dataBbox.maxX-_dataBbox.minX;
         var zoom=spanX>600000?7:spanX>300000?8:spanX>100000?9:10;
         return{lat:wgs[1].toFixed(4),lon:wgs[0].toFixed(4),zoom:zoom};
