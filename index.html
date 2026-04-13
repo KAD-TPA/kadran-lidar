@@ -1177,6 +1177,8 @@ function save(){
   showAS('saving');
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(function(){
+    var _ts = Date.now();
+    _lastSaveTs = _ts; // évite le re-render au retour de notre propre écriture
     var payload = {
       data: S.data,
       settings: S.settings,
@@ -1187,7 +1189,7 @@ function save(){
       acqSettings: S.acqSettings || {},
       acqContacts: S.acqContacts || [],
       cadNotes: S.cadNotes || '',
-      _ts: Date.now()
+      _ts: _ts
     };
     DB_REF.set(payload, function(err){
       showAS(err ? 'error' : 'saved');
@@ -1219,37 +1221,31 @@ function showAS(s){
 }
 
 // ── REALTIME LISTENER ──
-// Track last save timestamp to avoid re-applying our own writes
 var _lastSaveTs = 0;
+var _fbListenerRef = null; // ref sur laquelle le listener est actuellement attaché
 
-if(DB_REF){
-DB_REF.on('value', function(snapshot){
+function _fbListenerFn(snapshot){
   var remote = snapshot.val();
   if(!remote){
-    // First launch: push initial data with TPA stamps
     if(!_fbLoaded){
       _fbLoaded = true;
       S.data = [];
-      save(); // push to Firebase
+      save();
       _refreshAll();
       showAS('online');
     }
     return;
   }
-
-  // If this update is from our own recent save, skip re-render (avoids flicker)
+  // Ignorer nos propres écritures pour éviter le re-render inutile
   if(remote._ts && remote._ts === _lastSaveTs) return;
   _lastSaveTs = remote._ts || 0;
-
   _fbLoaded = true;
-  // Apply remote state — validate data integrity first
+
   if(remote.data && Array.isArray(remote.data) && remote.data.length > 0){
-    // Check if remote data has proper structure (not a stripped old version)
     var sample = remote.data[0];
     var hasStatus = sample.gen_lidar_brut !== undefined || sample.calc_traj !== undefined || sample.import_dalles !== undefined;
     if(hasStatus){
       S.data = remote.data;
-      // Ensure _edits exists on all entries (migrate old records)
       S.data.forEach(function(d){
         if(!d._edits) d._edits = {};
         EDITABLE_FIELDS.forEach(function(k){
@@ -1259,10 +1255,9 @@ DB_REF.on('value', function(snapshot){
         });
       });
     } else {
-      // Old/corrupt data — reset
       S.data = [];
     }
-  } else if(remote.data) {
+  } else if(remote.data){
     S.data = [];
   }
   if(remote.settings) S.settings = remote.settings;
@@ -1277,21 +1272,31 @@ DB_REF.on('value', function(snapshot){
 
   showAS('online');
   _refreshAll();
-});
-} // end if(DB_REF)
+}
 
-// Connection state indicator
-if(typeof db !== 'undefined'){
-db.ref('.info/connected').on('value', function(snap){
-  if(!snap.val()){
-    showAS('error');
-    document.getElementById('as-txt').textContent = 'Hors ligne';
-    document.getElementById('as-icon').textContent = '🔴';
-  } else if(_fbLoaded){
-    showAS('online');
-  }
-});
-} // end if(typeof db !== 'undefined')
+// Attache (ou réattache) le listener sur DB_REF courant
+function _attachFbListener(){
+  if(!DB_REF) return;
+  // Détacher l'ancien listener si présent
+  if(_fbListenerRef){ _fbListenerRef.off('value', _fbListenerFn); }
+  _fbListenerRef = DB_REF;
+  _fbLoaded = false;
+  _lastSaveTs = 0;
+  DB_REF.on('value', _fbListenerFn);
+}
+
+// Listener de connexion (une seule fois)
+if(db){
+  db.ref('.info/connected').on('value', function(snap){
+    if(!snap.val()){
+      showAS('error');
+      document.getElementById('as-txt').textContent = 'Hors ligne';
+      document.getElementById('as-icon').textContent = '🔴';
+    } else if(_fbLoaded){
+      showAS('online');
+    }
+  });
+}
 
 function _refreshAll(){
   // Refresh whichever view is currently active
@@ -5981,8 +5986,11 @@ function selectProject(id){
         if(local.consignes) S.consignes = local.consignes;
       }
     } catch(e){}
-    // Update DB_REF key
-    if(DB_REF && db) DB_REF = db.ref(proj.dbRef);
+    // Update DB_REF et réattacher le listener sur la nouvelle ref
+    if(db && proj.dbRef){
+      DB_REF = db.ref(proj.dbRef);
+      _attachFbListener();
+    }
   }
   // Update sidebar badge immediately with real LIT counts
   updateSidebarBadge();
