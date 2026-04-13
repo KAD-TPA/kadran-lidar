@@ -5318,7 +5318,11 @@ function _importCadrage(rows){
   try{
     var sv=JSON.parse(localStorage.getItem('kadran_projects')||'[]');
     var idx=sv.findIndex(function(p){return p.id===ACTIVE_PROJECT.id;});
-    if(idx>=0){sv[idx]=ACTIVE_PROJECT;localStorage.setItem('kadran_projects',JSON.stringify(sv));}
+    if(idx>=0){
+      sv[idx]=ACTIVE_PROJECT;
+      localStorage.setItem('kadran_projects',JSON.stringify(sv));
+      _pushProjectToRegistry(ACTIVE_PROJECT); // sync stats vers Firebase
+    }
   }catch(ex){}
   save();
 }
@@ -6645,7 +6649,7 @@ function npCreate(){
     firebaseConfig:(PROJECTS[0]&&PROJECTS[0].firebaseConfig)||{}
   }, _projData);
   PROJECTS.push(newProj);
-  try{var sv=JSON.parse(localStorage.getItem('kadran_projects')||'[]');sv.push(newProj);localStorage.setItem('kadran_projects',JSON.stringify(sv));}catch(e){}
+  _pushProjectToRegistry(newProj); // localStorage + Firebase registry
   closeNewProjectModal();
   renderProjectScreen();
   alert('&#x2705; Projet "'+newProj.name+'" créé avec succès !');
@@ -6654,6 +6658,53 @@ function loadSavedProjects(){
   try{
     var saved=JSON.parse(localStorage.getItem('kadran_projects')||'[]');
     saved.forEach(function(p){if(!PROJECTS.find(function(x){return x.id===p.id;}))PROJECTS.push(p);});
+  }catch(e){}
+  // Synchroniser depuis Firebase si disponible
+  _syncProjectRegistry();
+}
+
+function _syncProjectRegistry(){
+  if(!db) return;
+  db.ref('kadran_registry').on('value', function(snap){
+    var registry=snap.val()||{};
+    var changed=false;
+    Object.keys(registry).forEach(function(pid){
+      var proj=registry[pid];
+      if(!proj||!proj.id) return;
+      var existing=PROJECTS.find(function(p){return p.id===proj.id;});
+      if(!existing){
+        PROJECTS.push(proj);
+        // Persister localement pour accès hors ligne
+        try{
+          var sv=JSON.parse(localStorage.getItem('kadran_projects')||'[]');
+          if(!sv.find(function(p){return p.id===proj.id;})){
+            sv.push(proj);
+            localStorage.setItem('kadran_projects',JSON.stringify(sv));
+          }
+        }catch(e){}
+        changed=true;
+      } else {
+        // Mettre à jour les stats si elles ont changé
+        if(proj.stats && proj.stats !== existing.stats){
+          existing.stats = proj.stats;
+          changed = true;
+        }
+      }
+    });
+    if(changed) renderProjectScreen();
+  });
+}
+
+function _pushProjectToRegistry(proj){
+  if(!db||!proj||!proj.id) return;
+  // Stocker dans Firebase (accessible depuis tous les navigateurs)
+  try{ db.ref('kadran_registry/'+proj.id).set(proj); }catch(e){}
+  // Et localement
+  try{
+    var sv=JSON.parse(localStorage.getItem('kadran_projects')||'[]');
+    var idx=sv.findIndex(function(p){return p.id===proj.id;});
+    if(idx>=0) sv[idx]=proj; else sv.push(proj);
+    localStorage.setItem('kadran_projects',JSON.stringify(sv));
   }catch(e){}
 }
 
