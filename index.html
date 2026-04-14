@@ -2854,6 +2854,8 @@ function renderAcqNouveauVol(){
     +'<textarea class="ta" id="acq-comment" style="min-height:64px" placeholder="Conditions météo, incidents, remarques…" onchange="_acqDraft.comment=this.value">'+d.comment.replace(/</g,'&lt;').replace(/>/g,'&gt;')+'</textarea>'
     +'</div>'
 
+    // Fichier trajectoire
+    +'<div class="fi-group" style="margin-bottom:18px">'    +'<div class="fi-lbl">Fichier trajectoire <span style="color:var(--muted);font-size:10px">(optionnel — max 300 Mo)</span></div>'    +'<div id="traj-upload-zone"></div>'    +'</div>'
     // Boutons
     +'<div style="display:flex;gap:10px;align-items:center">'
     +'<button class="btn btn-primary" onclick="saveAcqFlight()">💾 Enregistrer</button>'
@@ -2887,6 +2889,8 @@ function renderAcqNouveauVol(){
   if(_chrono.running||_chrono.elapsed){ _chronoTick(); }
   // Restore atmo display if already fetched
   _updateFormAtmoDisplay();
+  // Render trajectory upload zone
+  setTimeout(function(){ if(typeof _trajRefreshZone==='function') _trajRefreshZone(); }, 20);
 }
 
 function saveAcqFlight(){
@@ -2914,6 +2918,11 @@ function saveAcqFlight(){
     existing.atmoHum=_acqDraft.atmoHum; existing.atmoPress=_acqDraft.atmoPress;
     existing.atmoKp=_acqDraft.atmoKp; existing.atmoLat=_acqDraft.atmoLat; existing.atmoLon=_acqDraft.atmoLon;
     if(_acqDraft.trajFile) existing.trajFile=_acqDraft.trajFile;
+    // Lancer analyse .raw si le parsing est prêt
+    if(_trajRawParsed){
+      var _lid=existing.id;
+      setTimeout(function(){_analyzeTrajAndAlert(_trajRawParsed,_lid);_trajRawParsed=null;},200);
+    }
     existing.updatedAt=new Date().toISOString().slice(0,16);
     existing.updatedBy=CURRENT_USER||'?';
   } else {
@@ -2926,6 +2935,7 @@ function saveAcqFlight(){
       atmoHum:_acqDraft.atmoHum, atmoPress:_acqDraft.atmoPress,
       atmoKp:_acqDraft.atmoKp, atmoLat:_acqDraft.atmoLat, atmoLon:_acqDraft.atmoLon,
       trajFile:_acqDraft.trajFile||null,
+      _rawParsed: _trajRawParsed||null,
       acq_calcul_exp:null,acq_ctrl_caract:null,acq_ctrl_complet:null,acq_ctrl_prec:null,
       createdAt:new Date().toISOString().slice(0,16),
       createdBy:CURRENT_USER||'?',_edits:{}
@@ -3502,6 +3512,144 @@ function _switchWindyOv(btn){
   _switchWindy(url, btn);
 }
 
+
+// ═══════════════════════════════════════════
+// PARSEUR FICHIER .RAW — Applanix POSLV
+// ═══════════════════════════════════════════
+
+// Constantes GRP
+var _GRP_MAGIC = 0x50524724; // '$GRP' en little-endian
+var _GRP_NAV   = 1;   // Navigation solution (lat/lon/alt) 10Hz
+var _GRP_CAM2  = 6;   // Camera 2 Nadir — events ~2s
+var _GRP_CAM1  = 5;   // Camera 1 oblique gauche
+var _GRP_CAM3  = 30;  // Camera 3 oblique droite
+var _RAW_GAP_S = 10;  // Seuil de coupure entre axes (secondes)
+var _RAW_MIN_M = 100; // Longueur minimale d'un axe (mètres)
+
+function _rawParseFile(arrayBuffer, onDone, onProgress){
+  var buf  = arrayBuffer;
+  var view = new DataView(buf);
+  var len  = buf.byteLength;
+
+  var nav    = []; // [{t, lat, lon, alt}]
+  var events = []; // [{t}] — GRP6 seulement
+  var grpCounts = {};
+
+  // ── Scan complet des records GRP ──
+  var i = 0;
+  while(i < len - 8){
+    // Chercher le marqueur $GRP (24 47 52 50)
+    if(view.getUint8(i)===0x24 && view.getUint8(i+1)===0x47 &&
+       view.getUint8(i+2)===0x52 && view.getUint8(i+3)===0x50){
+      var gid    = view.getUint16(i+4, true);
+      var bcount = view.getUint16(i+6, true);
+      grpCounts[gid] = (grpCounts[gid]||0)+1;
+
+      if(gid === _GRP_NAV && i+8+44 < len){
+        var t   = view.getFloat64(i+8,  true); // GPS time
+        var lat = view.getFloat64(i+34, true); // Latitude
+        var lon = view.getFloat64(i+42, true); // Longitude
+        var alt = view.getFloat64(i+50, true); // Altitude MSL
+        if(lat>=-90&&lat<=90&&lon>=-180&&lon<=180&&alt>0&&alt<5000){
+          nav.push({t:t,lat:lat,lon:lon,alt:alt});
+        }
+      }
+      else if(gid === _GRP_CAM2 && i+8 < len){
+        var t = view.getFloat64(i+8, true);
+        events.push({t:t});
+      }
+      i += 8 + bcount + 4; // skip $GRP header + data + checksum+$#
+      continue;
+    }
+    i++;
+  }
+
+  if(!events.length){ onDone(null,'Aucun event caméra (GRP6) trouvé dans ce fichier.'); return; }
+  if(!nav.length){    onDone(null,'Aucune donnée de navigation (GRP1) trouvée.'); return; }
+
+  nav.sort(function(a,b){return a.t-b.t;});
+  events.sort(function(a,b){return a.t-b.t;});
+
+  // ── Interpoler la position pour chaque event ──
+  function interpNav(t){
+    if(t<=nav[0].t) return nav[0];
+    if(t>=nav[nav.length-1].t) return nav[nav.length-1];
+    var lo=0,hi=nav.length-1;
+    while(lo<hi-1){var m=(lo+hi)>>1;nav[m].t<=t?lo=m:hi=m;}
+    var f=(t-nav[lo].t)/(nav[hi].t-nav[lo].t);
+    return {t:t,lat:nav[lo].lat+f*(nav[hi].lat-nav[lo].lat),
+            lon:nav[lo].lon+f*(nav[hi].lon-nav[lo].lon),
+            alt:nav[lo].alt+f*(nav[hi].alt-nav[lo].alt)};
+  }
+
+  var evPts = events.map(function(e){ var p=interpNav(e.t); return {t:e.t,lat:p.lat,lon:p.lon,alt:p.alt}; });
+
+  // ── GPS time → UTC (semaine GPS) ──
+  // On extrait la date du premier event pour calculer la semaine GPS
+  var tFirst = evPts[0].t;
+  // GPS epoch = 6 Jan 1980, leapSeconds=18
+  var gpsEpoch = new Date('1980-01-06T00:00:00Z').getTime();
+  var utcMs    = gpsEpoch + (tFirst - 18)*1000;
+  // Trouver le début de la semaine GPS (dimanche)
+  var utcDate  = new Date(utcMs);
+  var dow      = utcDate.getUTCDay(); // 0=dim
+  var weekStart= new Date(utcMs - dow*86400000);
+  weekStart.setUTCHours(0,0,0,0);
+  var weekStartMs = weekStart.getTime() + 18000; // +leap seconds
+
+  function gpsToDate(t){
+    return new Date(gpsEpoch + (t-18)*1000);
+  }
+
+  // ── Détection axes : gap > 10s, longueur > 100m ──
+  function haversine(lat1,lon1,lat2,lon2){
+    var R=6371000,p=Math.PI/180;
+    var dlat=(lat2-lat1)*p, dlon=(lon2-lon1)*p;
+    var a=Math.sin(dlat/2)*Math.sin(dlat/2)+Math.cos(lat1*p)*Math.cos(lat2*p)*Math.sin(dlon/2)*Math.sin(dlon/2);
+    return 2*R*Math.asin(Math.sqrt(a));
+  }
+  function trackLength(pts){
+    var s=0; for(var k=1;k<pts.length;k++) s+=haversine(pts[k-1].lat,pts[k-1].lon,pts[k].lat,pts[k].lon);
+    return s;
+  }
+  function pad2(n){return String(n).padStart(2,'0');}
+  function fmtTime(d){return pad2(d.getUTCHours())+':'+pad2(d.getUTCMinutes())+':'+pad2(d.getUTCSeconds());}
+  function fmtDate(d){return d.getUTCFullYear()+'-'+pad2(d.getUTCMonth()+1)+'-'+pad2(d.getUTCDate());}
+
+  var rawAxes=[], cur=[evPts[0]];
+  for(var k=1;k<evPts.length;k++){
+    if(evPts[k].t-evPts[k-1].t>_RAW_GAP_S){ rawAxes.push(cur); cur=[]; }
+    cur.push(evPts[k]);
+  }
+  rawAxes.push(cur);
+
+  var axes = rawAxes.filter(function(ax){return trackLength(ax)>=_RAW_MIN_M;});
+
+  var dateRef = gpsToDate(evPts[0].t);
+
+  var result = {
+    date:       fmtDate(dateRef),
+    t_start:    fmtTime(gpsToDate(evPts[0].t)),
+    t_end:      fmtTime(gpsToDate(evPts[evPts.length-1].t)),
+    n_events:   evPts.length,
+    axes:       axes.map(function(ax,idx){
+      var d1=gpsToDate(ax[0].t), d2=gpsToDate(ax[ax.length-1].t);
+      var lg=trackLength(ax);
+      var altMean=ax.reduce(function(s,p){return s+p.alt;},0)/ax.length;
+      return {
+        axis_id:  idx+1,
+        t_start:  fmtTime(d1),
+        t_end:    fmtTime(d2),
+        dur_s:    Math.round(ax[ax.length-1].t - ax[0].t),
+        length_m: Math.round(lg),
+        alt_mean: Math.round(altMean),
+        n_events: ax.length,
+        pts:      ax   // garder les points pour l'analyse
+      };
+    })
+  };
+  onDone(result, null);
+}
 // ═══════════════════════════════════════════
 // CLOUDINARY — Fichiers Trajectoire
 // ═══════════════════════════════════════════
@@ -3511,6 +3659,8 @@ var _CLOUD_FOLDER = 'trajectoires';
 var _TRAJ_QUOTA_GB = 2.5;
 var _TRAJ_RETENTION_DAYS = 5;
 var _trajUploading = false;
+var _trajParsing   = false;  // parsing .raw en cours
+var _trajRawParsed = null;   // résultat du parsing
 
 function _formatSize(bytes){
   if(bytes>1e9) return (bytes/1e9).toFixed(1)+' Go';
@@ -3525,6 +3675,11 @@ function _trajUploadHtml(){
     return '<div style="background:var(--surf2);border-radius:8px;padding:12px;text-align:center">'
       +'<div id="traj-progress-bar" style="height:6px;background:#185FA5;border-radius:3px;width:0%;transition:width .3s;margin-bottom:8px"></div>'
       +'<div id="traj-progress-txt" style="font-size:11px;color:var(--muted)">Envoi en cours…</div>'
+      +'</div>';
+  }
+  if(_trajParsing){
+    return '<div style="background:var(--surf2);border-radius:8px;padding:12px;text-align:center">'
+      +'<div style="font-size:11px;color:var(--muted)">🔍 Analyse du fichier .raw en cours…</div>'
       +'</div>';
   }
   if(f&&f.url){
@@ -3562,6 +3717,21 @@ function _trajDrop(e){
 function _trajPickFile(file){
   if(!file) return;
   if(file.size > 300*1024*1024){ alert('Fichier trop volumineux (max 300 Mo).'); return; }
+  // Si fichier .raw → parser en parallèle de l'upload
+  var ext = file.name.split('.').pop().toLowerCase();
+  if(ext === 'raw'){
+    var reader = new FileReader();
+    reader.onload = function(e){
+      _trajParsing = true; _trajRefreshZone();
+      _rawParseFile(e.target.result, function(parsed, err){
+        _trajParsing = false;
+        _trajRawParsed = parsed;
+        if(err){ console.warn('RAW parse error:', err); }
+        _trajRefreshZone();
+      }, null);
+    };
+    reader.readAsArrayBuffer(file);
+  }
   _trajUpload(file);
 }
 
@@ -3595,6 +3765,12 @@ function _trajUpload(file){
         uploadedAt: new Date().toISOString().slice(0,16),
         uploadedBy: CURRENT_USER||'?'
       };
+      // Déclencher l'analyse si le parsing .raw est terminé
+      if(_trajRawParsed){
+        var logId = _acqDraft.session || ('draft_'+Date.now());
+        _analyzeTrajAndAlert(_trajRawParsed, logId);
+        _trajRawParsed = null;
+      }
       // Vérifier quota après upload
       _trajCheckQuota();
     } else {
@@ -3698,6 +3874,7 @@ function renderFlightLogs(){
     + '<th style="min-width:90px">Secteur</th>'
     + ACQ_STEPS.map(function(s){ return '<th style="min-width:110px;white-space:nowrap">'+s.l+'</th>'; }).join('')
     + '<th style="min-width:130px">Commentaires</th>'
+    + '<th style="min-width:120px;white-space:nowrap">📁 Trajectoire</th>'
     + '<th style="width:70px"></th>'
     + '</tr>';
 
@@ -3720,6 +3897,11 @@ function renderFlightLogs(){
       + '<td style="color:var(--muted);font-size:11px">' + (log.sector||'—') + '</td>'
       + stepCells
       + '<td style="min-width:130px">'+phCommentCell(log.id,'acq')+'</td>'
+      + '<td style="min-width:120px">'
+      + (log.trajFile&&log.trajFile.url
+          ? '<a href="'+log.trajFile.url+'" target="_blank" download style="font-size:11px;color:var(--blue);text-decoration:none;display:flex;align-items:center;gap:4px"><span>📁</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:90px">'+log.trajFile.name+'</span></a>'
+          : '<span style="font-size:10px;color:var(--muted)">—</span>')
+      + '</td>'
       + '<td style="text-align:right;white-space:nowrap">'
       + '<button onclick="openLogForm(\''+id+'\')" style="border:none;background:none;cursor:pointer;color:var(--blue);font-size:13px;padding:2px 5px" title="Modifier infos">✏️</button>'
       + '<button onclick="deleteFlightLog(\''+id+'\')" style="border:none;background:none;cursor:pointer;color:var(--err);font-size:13px;padding:2px 5px" title="Supprimer">🗑</button>'
@@ -4884,6 +5066,196 @@ var _statusList = '"OK,En cours,NON,"';
 // ═══════════════════════════════════════════
 // EXPORT EXCEL PRINCIPAL
 // ═══════════════════════════════════════════
+
+// ═══════════════════════════════════════════
+// ANALYSE TRAJECTOIRE — Vitesse + Hauteur IGN
+// ═══════════════════════════════════════════
+
+var _IGN_ELEV_URL = 'https://data.geopf.fr/altimetrie/1.0/calcul/alti/rest/elevation.json';
+var _TRAJ_SEGMENT_M = 100; // tranche d'analyse en mètres
+
+// Découpe un axe en tranches de ~100m et retourne les points représentatifs
+function _trajSegments(ax){
+  var segs=[], acc=0, segStart=0;
+  for(var k=1;k<ax.pts.length;k++){
+    var d=_rawHaversine(ax.pts[k-1].lat,ax.pts[k-1].lon,ax.pts[k].lat,ax.pts[k].lon);
+    acc+=d;
+    if(acc>=_TRAJ_SEGMENT_M||k===ax.pts.length-1){
+      segs.push({
+        p1:ax.pts[segStart], p2:ax.pts[k],
+        dist_m: acc,
+        dt_s: ax.pts[k].t - ax.pts[segStart].t,
+        alt_gps: (ax.pts[segStart].alt+ax.pts[k].alt)/2,
+        lat_mid: (ax.pts[segStart].lat+ax.pts[k].lat)/2,
+        lon_mid: (ax.pts[segStart].lon+ax.pts[k].lon)/2
+      });
+      segStart=k; acc=0;
+    }
+  }
+  return segs;
+}
+
+function _rawHaversine(lat1,lon1,lat2,lon2){
+  var R=6371000,p=Math.PI/180;
+  var a=Math.sin((lat2-lat1)*p/2)**2+Math.cos(lat1*p)*Math.cos(lat2*p)*Math.sin((lon2-lon1)*p/2)**2;
+  return 2*R*Math.asin(Math.sqrt(a));
+}
+
+// Fetch élévations IGN par batch de 50 points
+function _fetchIgnElevBatch(lats, lons, cb){
+  var latStr=lats.join('|'), lonStr=lons.join('|');
+  var url=_IGN_ELEV_URL+'?lon='+lonStr+'&lat='+latStr+'&resource=ign_rge_alti_wld&zonly=true';
+  fetch(url)
+    .then(function(r){return r.json();})
+    .then(function(d){
+      var alts=(d.elevations||[]).map(function(e){return parseFloat(e.z)||0;});
+      cb(alts,null);
+    })
+    .catch(function(e){cb(null,e);});
+}
+
+// Analyse complète d'un axe : retourne {segs_ok, segs_warn_speed, segs_warn_alt, speed_max_kmh, alt_min_m, alt_max_m}
+async function _analyzeAxis(ax, params){
+  var segs = _trajSegments(ax);
+  if(!segs.length) return null;
+
+  // Vitesse par segment
+  segs.forEach(function(s){
+    s.speed_kmh = s.dt_s>0 ? (s.dist_m/s.dt_s)*3.6 : 0;
+  });
+
+  // Élévations IGN par batch de 50
+  var elevs=[];
+  var BATCH=50;
+  for(var i=0;i<segs.length;i+=BATCH){
+    var batch=segs.slice(i,i+BATCH);
+    var lats=batch.map(function(s){return s.lat_mid.toFixed(6);});
+    var lons=batch.map(function(s){return s.lon_mid.toFixed(6);});
+    await new Promise(function(resolve){
+      _fetchIgnElevBatch(lats,lons,function(alts,err){
+        if(alts) batch.forEach(function(s,j){s.alt_terrain=alts[j]||0;});
+        else     batch.forEach(function(s){s.alt_terrain=0;});
+        resolve();
+      });
+    });
+  }
+
+  // AGL = GPS alt - terrain alt
+  segs.forEach(function(s){
+    s.agl = s.alt_terrain>0 ? s.alt_gps - s.alt_terrain : null;
+  });
+
+  // Seuils théoriques
+  var thSpeed = params.vitesse   ? parseFloat(params.vitesse)   : null;
+  var thAlt   = params.hauteur_vol ? parseFloat(params.hauteur_vol) : null;
+
+  var warn_speed=[], warn_alt=[];
+  segs.forEach(function(s,idx){
+    if(thSpeed && s.speed_kmh > thSpeed*1.15) warn_speed.push(idx);
+    if(thAlt && s.agl!==null){
+      if(s.agl > thAlt*1.15 || s.agl < thAlt*0.85) warn_alt.push(idx);
+    }
+  });
+
+  return {
+    segs:        segs,
+    warn_speed:  warn_speed,
+    warn_alt:    warn_alt,
+    has_warn:    warn_speed.length>0 || warn_alt.length>0,
+    speed_max:   Math.round(Math.max.apply(null,segs.map(function(s){return s.speed_kmh;}))),
+    speed_mean:  Math.round(segs.reduce(function(a,s){return a+s.speed_kmh;},0)/segs.length),
+    agl_min:     segs.filter(function(s){return s.agl!==null;}).length ?
+                   Math.round(Math.min.apply(null,segs.filter(function(s){return s.agl!==null;}).map(function(s){return s.agl;}))) : null,
+    agl_max:     segs.filter(function(s){return s.agl!==null;}).length ?
+                   Math.round(Math.max.apply(null,segs.filter(function(s){return s.agl!==null;}).map(function(s){return s.agl;}))) : null
+  };
+}
+
+// Analyse tous les axes + génère alertes
+async function _analyzeTrajAndAlert(parsedRaw, logId){
+  var params = (S.acqSettings)||{};
+  // Récupérer aussi les params du cadrage projet
+  var cad = (ACTIVE_PROJECT&&ACTIVE_PROJECT._cadrage)||{};
+  var mergedParams = Object.assign({}, {
+    vitesse:     cad.vitesse     || params.vitesse     || '',
+    hauteur_vol: cad.hauteur_vol || params.hauteur_vol || ''
+  });
+
+  var log = (S.flightLogs||[]).find(function(l){return l.id===logId;});
+  if(!log) return;
+
+  // Stocker les axes dans le log
+  log.trajAxes = parsedRaw.axes.map(function(ax){
+    return {axis_id:ax.axis_id, t_start:ax.t_start, t_end:ax.t_end,
+            length_m:ax.length_m, alt_mean:ax.alt_mean, n_events:ax.n_events,
+            pts: ax.pts.map(function(p){return {lat:p.lat,lon:p.lon,alt:p.alt};})};
+  });
+  log.trajDate  = parsedRaw.date;
+  log.trajReady = false;
+
+  save();
+  renderAcqNouveauVol();
+
+  // Analyser chaque axe
+  var allAnalysis=[], anyWarn=false;
+  for(var i=0;i<parsedRaw.axes.length;i++){
+    var ax=parsedRaw.axes[i];
+    var ana = await _analyzeAxis(ax, mergedParams);
+    if(ana){
+      allAnalysis.push({ax:ax, ana:ana});
+      if(ana.has_warn) anyWarn=true;
+      // Stocker l'analyse dans le log
+      log.trajAxes[i].analysis = {
+        speed_max: ana.speed_max, speed_mean: ana.speed_mean,
+        agl_min: ana.agl_min, agl_max: ana.agl_max,
+        warn_speed: ana.warn_speed.length, warn_alt: ana.warn_alt.length,
+        has_warn: ana.has_warn
+      };
+    }
+  }
+  log.trajReady = true;
+  log.trajHasWarn = anyWarn;
+
+  // Générer alertes dans les commentaires
+  if(!S.phaseComments) S.phaseComments=[];
+  allAnalysis.forEach(function(item){
+    var ax=item.ax, ana=item.ana;
+    var msgs=[];
+
+    if(ana.warn_speed.length){
+      msgs.push('⚡ Vitesse élevée sur '+ana.warn_speed.length+' tranche(s) — max '
+        +ana.speed_max+' km/h'+(mergedParams.vitesse?' (théorique '+mergedParams.vitesse+' km/h)':''));
+    }
+    if(ana.warn_alt.length){
+      msgs.push('📐 Hauteur hors tolérance sur '+ana.warn_alt.length+' tranche(s) — AGL '
+        +ana.agl_min+'m–'+ana.agl_max+'m'
+        +(mergedParams.hauteur_vol?' (théorique '+mergedParams.hauteur_vol+'m)':''));
+    }
+    msgs.forEach(function(msg){
+      S.phaseComments.push({
+        id: 'traj_'+Date.now()+'_'+Math.random().toString(36).slice(2,5),
+        lit: logId, phase: 'acq',
+        text: '[Axe '+ax.axis_id+' · '+ax.t_start+'→'+ax.t_end+'] '+msg,
+        keyword: 'TRAJ', type: 'todo',
+        date: parsedRaw.date,
+        by: 'AUTO', at: new Date().toISOString().slice(0,16),
+        _csvExport: false
+      });
+    });
+  });
+
+  save();
+  renderMapSvg(); // Rafraîchir la carte avec les axes
+  _trajRefreshZone();
+  var toastMsg = anyWarn
+    ? '⚠️ '+parsedRaw.axes.length+' axe(s) analysé(s) — alertes générées'
+    : '✅ '+parsedRaw.axes.length+' axe(s) analysé(s) — paramètres OK';
+  var t=document.createElement('div');
+  t.textContent=toastMsg;
+  t.style.cssText='position:fixed;bottom:80px;right:20px;background:'+(anyWarn?'#7c2d12':'#14532d')
+    +';color:#fff;padding:9px 16px;border-radius:8px;font-size:12px;z-index:9999;pointer-events:none';
+  document.body.appendChild(t); setTimeout(function(){t.remove();},6000);
+}
 // ═══════════════════════════════════════════
 // AUTO-EXPORT EXCEL — Dossier réseau (File System Access API)
 // ═══════════════════════════════════════════
@@ -7383,6 +7755,23 @@ function renderMapSvg(){
   });
 
   var bg=useBM?'#f0f0f0':'#dce8f0';
+  // ── Axes de vol superposés ──
+  var trajPaths='';
+  (S.flightLogs||[]).forEach(function(log){
+    if(!log.trajAxes||!log.trajAxes.length) return;
+    log.trajAxes.forEach(function(ax){
+      if(!ax.pts||ax.pts.length<2) return;
+      var hasWarn=ax.analysis&&ax.analysis.has_warn;
+      var col=hasWarn?'#f97316':'#22c55e';
+      var pts=ax.pts.map(function(p){var m=wgs84ToMerc(p.lon,p.lat);return mercToScreen(m[0],m[1],W,H);});
+      if(pts.length<2) return;
+      var d='M'+pts[0][0].toFixed(1)+' '+pts[0][1].toFixed(1);
+      for(var k=1;k<pts.length;k++) d+=' L'+pts[k][0].toFixed(1)+' '+pts[k][1].toFixed(1);
+      var lbl=(log.date||'')+' Axe '+ax.axis_id+(hasWarn?' ⚠️':'');
+      trajPaths+='<path d="'+d+'" stroke="'+col+'" stroke-width="2.5" fill="none" opacity="0.85" stroke-linecap="round"><title>'+lbl+'</title></path>';
+    });
+  });
+
   var svgHTML='<svg id="map-svg" width="'+W+'" height="'+H+'" style="display:block;position:absolute;top:0;left:0;background:transparent;cursor:grab">'
     +(useBM?'':'<rect width="'+W+'" height="'+H+'" fill="'+bg+'"/>')+paths
     +'<rect x="10" y="10" width="30" height="30" rx="5" fill="white" stroke="#ddd" style="cursor:pointer" onclick="mapZoomBtn(1.5)"/>'
