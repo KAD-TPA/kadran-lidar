@@ -1144,6 +1144,9 @@ if(_fbAvailable && firebaseConfig.apiKey){
     firebase.initializeApp(firebaseConfig);
     db = firebase.database();
     DB_REF = db.ref('kadran_v5');
+    // Listener attaché immédiatement — sera réattaché sur le bon dbRef dans selectProject()
+    // On appelle après la déclaration de _attachFbListener via setTimeout
+    setTimeout(function(){ if(typeof _attachFbListener==='function') _attachFbListener(); }, 0);
   } catch(e) {
     console.warn('Firebase init failed:', e);
     _fbAvailable = false;
