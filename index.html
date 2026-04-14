@@ -341,6 +341,7 @@ tr:hover td{background:var(--surf2);}
       <button class="btn btn-secondary btn-sm" onclick="goHome()" title="Retour à la sélection de projet" style="gap:5px">🏠 Projets</button>
       <div class="user-badge" id="user-badge" onclick="changeTrigram()" title="Changer de trigramme"><span>👤</span><span id="user-badge-txt">—</span></div>
       <button class="btn btn-secondary" onclick="exportXLSX()">⬇ Export Excel</button>
+      <button class="btn btn-secondary" onclick="exportCSV()">⬇ Export CSV</button>
       <button class="btn btn-secondary" onclick="aeResetConfig()" title="Reconfigurer le dossier d'export automatique">⚙️ Export auto</button>
       <button class="btn btn-secondary" onclick="importXLSX()">⬆ Import Excel</button>
       <button class="btn btn-primary" onclick="nav('livraison',document.querySelector('[data-view=livraison]'))">🚀 Nouvelle livraison</button>
@@ -3897,6 +3898,7 @@ function addPhComment(lit, ph){
   var text = (document.getElementById('pc-text').value||'').trim();
   if(!text){ alert('Le commentaire ne peut pas être vide.'); return; }
   if(!S.phaseComments) S.phaseComments=[];
+  var csvChk = document.getElementById('pc-csv');
   var c = {
     id: 'pc_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
     lit: lit, phase: ph,
@@ -3906,7 +3908,8 @@ function addPhComment(lit, ph){
     step: document.getElementById('pc-step').value||'',
     type: document.getElementById('pc-type').value||'info',
     by: CURRENT_USER||'?',
-    at: new Date().toISOString().slice(0,16)
+    at: new Date().toISOString().slice(0,16),
+    _csvExport: csvChk ? csvChk.checked : false
   };
   S.phaseComments.push(c);
   save();
@@ -4799,6 +4802,30 @@ async function _aeWriteToDir(handle){
   }
 }
 
+// Écrit le fichier CSV dans le dossier mémorisé
+async function _aeWriteToDirCSV(handle){
+  var bytes = (typeof _buildCSVBytes==='function') ? _buildCSVBytes() : null;
+  if(!bytes) return false;
+  var now = new Date();
+  var pad = function(n){ return String(n).padStart(2,'0'); };
+  var fname = 'SUIVI_'
+    + now.getFullYear()+'-'+pad(now.getMonth()+1)+'-'+pad(now.getDate())
+    + '_'+pad(now.getHours())+'h'+pad(now.getMinutes())+'.csv';
+  try{
+    var perm = await handle.queryPermission({mode:'readwrite'});
+    if(perm !== 'granted') perm = await handle.requestPermission({mode:'readwrite'});
+    if(perm !== 'granted') return false;
+    var fileHandle = await handle.getFileHandle(fname, {create:true});
+    var writable = await fileHandle.createWritable();
+    await writable.write(bytes);
+    await writable.close();
+    return fname;
+  }catch(e){
+    console.warn('Auto-export CSV failed:', e);
+    return false;
+  }
+}
+
 // Tentative d'export silencieux au démarrage
 function _aeTryAutoExport(){
   // Vérifier si l'API est disponible (Chrome/Edge)
@@ -4817,11 +4844,12 @@ function _aeTryAutoExport(){
       return;
     }
     var fname = await _aeWriteToDir(handle);
-    if(fname){
+    var fnameCSV = await _aeWriteToDirCSV(handle);
+    if(fname || fnameCSV){
       localStorage.setItem(lastKey, today);
-      // Toast discret
+      var label = [fname, fnameCSV].filter(Boolean).join(' · ');
       var t=document.createElement('div');
-      t.textContent='💾 Export auto : '+fname;
+      t.textContent='💾 Export auto : '+label;
       t.style.cssText='position:fixed;bottom:80px;right:20px;background:#1e3a5f;color:#e0f0ff;padding:9px 16px;border-radius:8px;font-size:11px;z-index:9999;pointer-events:none;opacity:.9';
       document.body.appendChild(t);
       setTimeout(function(){t.remove();},5000);
@@ -5324,6 +5352,111 @@ function exportXLSX(){
     return;
   }
   XLSX.writeFile(WB,fname);
+}
+
+// ═══════════════════════════════════════════
+// EXPORT CSV — Format suivi Geodess
+// ═══════════════════════════════════════════
+function exportCSV(){
+  if(!ACTIVE_PROJECT){ alert('Aucun projet actif.'); return; }
+  var bytes = _buildCSVBytes();
+  if(!bytes) return;
+  var now = new Date();
+  var pad = function(n){return String(n).padStart(2,'0');};
+  var fname = 'SUIVI_'+now.getFullYear()+'-'+pad(now.getMonth()+1)+'-'+pad(now.getDate())
+    +'_'+pad(now.getHours())+'h'+pad(now.getMinutes())+'.csv';
+  var blob = new Blob([bytes],{type:'text/csv;charset=utf-8;'});
+  var a = document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download=fname; a.click(); URL.revokeObjectURL(a.href);
+}
+
+function _buildCSVBytes(){
+  if(!ACTIVE_PROJECT||!S.data) return null;
+  var data = S.data.slice().sort(function(a,b){
+    if(a.lot!==b.lot) return (a.lot||0)-(b.lot||0);
+    return String(a.lit).localeCompare(String(b.lit),'fr');
+  });
+
+  // Map statut interne → CSV
+  function toEtat(v){
+    if(!v||v==='') return '';
+    if(v==='OK') return 'OK';
+    if(v==='EN_COURS') return 'EC';
+    if(v==='NON'||v==='A_REPRENDRE') return 'NOK';
+    return v;
+  }
+
+  // Statut global d'une phase pour un LIT (OK/EC/NOK/'')
+  function phaseEtat(d, steps){
+    var vals = steps.map(function(k){return d[k]||'';});
+    if(vals.every(function(v){return v==='OK';})) return 'OK';
+    if(vals.some(function(v){return v==='NON'||v==='A_REPRENDRE';})) return 'NOK';
+    if(vals.some(function(v){return v==='EN_COURS'||v==='OK';})) return 'EC';
+    return '';
+  }
+
+  // Dates d'acquisition pour un LIT (depuis les flightLogs)
+  var logs = S.flightLogs||[];
+  function acqDates(lit){
+    var dates = [];
+    logs.forEach(function(l){
+      // Un log correspond à un vol — on récupère les LITs associés via le secteur ou tous
+      if(l.date && !dates.includes(l.date)) dates.push(l.date);
+    });
+    dates.sort();
+    return dates.join(', ');
+  }
+
+  // Commentaires CSV pour un LIT
+  function csvComments(lit){
+    return (S.phaseComments||[])
+      .filter(function(c){return c.lit===lit && c._csvExport;})
+      .map(function(c){
+        var parts=[]; if(c.keyword) parts.push(c.keyword); if(c.text) parts.push(c.text);
+        return parts.join(' : ');
+      })
+      .join(' | ');
+  }
+
+  // En-tête
+  var header = ['LIT','SECTEUR','LINEAIRE A FAIRE','DATE ACQUISITION',
+    'TRAITEMENT BRUT','CLASSIFICATION','MODELISATION','LIVRAISON',
+    'DATE PREVISIONNELLE LIVRAISON','DATE REELLE LIVRAISON','COMMENTAIRE'];
+
+  var rows = [header];
+  var TRT_STEPS  = ['gen_lidar_brut','import_lidar','ctrl_geo','matching','ctrl_matching','preclassif_kad','ctrl_preclassif'];
+  var CLS_STEPS  = ['cls_valid_cls','cls_fusion'];
+  var LIV_STEPS  = ['restit_emprise','restit_caract','restit_traj','rapport_meteo','pv_controle','ctrl_livraison'];
+
+  data.forEach(function(d){
+    var row = [
+      d.lit||'',
+      d.lot||'',
+      d.lineaire!==undefined&&d.lineaire!==null ? String(d.lineaire).replace('.',',') : '',
+      acqDates(d.lit),
+      phaseEtat(d, TRT_STEPS),
+      phaseEtat(d, CLS_STEPS),
+      toEtat(d.cls_valid_mod||''),
+      phaseEtat(d, LIV_STEPS),
+      d.plan_liv||d.planning||'',
+      d.date_livraison||d.reel_liv||'',
+      csvComments(d.lit)
+    ];
+    rows.push(row);
+  });
+
+  // Encoder en CSV (séparateur ;, UTF-8 BOM)
+  var csv = '\uFEFF' + rows.map(function(r){
+    return r.map(function(cell){
+      var s = String(cell);
+      if(s.indexOf(';')>=0||s.indexOf('"')>=0||s.indexOf('\n')>=0){
+        s = '"'+s.replace(/"/g,'""')+'"';
+      }
+      return s;
+    }).join(';');
+  }).join('\r\n');
+
+  return new TextEncoder().encode(csv);
 }
 
 // ═══════════════════════════════════════════
