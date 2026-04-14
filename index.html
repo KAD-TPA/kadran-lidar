@@ -2574,6 +2574,8 @@ function renderAcqView(){
     if(el) el.style.display=i===0?'':'none';
   });
   renderAcqRappel();
+  // Nettoyage des fichiers trajectoire > 5 jours
+  if(typeof _trajCleanOld==='function') _trajCleanOld();
 }
 
 function saveAcqField(key, val){
@@ -2696,7 +2698,8 @@ var _acqDraft = {
   date: new Date().toISOString().split('T')[0],
   session: '', debut: '', fin: '', comment: '', tpsVol: '—',
   atmoAlt: '', atmoTemp: '', atmoHum: '', atmoPress: '',
-  atmoKp: '', atmoLat: null, atmoLon: null, atmoFetching: false
+  atmoKp: '', atmoLat: null, atmoLon: null, atmoFetching: false,
+  trajFile: null  // {url, publicId, name, size, uploadedAt, uploadedBy}
 };
 
 var _chrono = {
@@ -2910,6 +2913,7 @@ function saveAcqFlight(){
     existing.atmoAlt=_acqDraft.atmoAlt; existing.atmoTemp=_acqDraft.atmoTemp;
     existing.atmoHum=_acqDraft.atmoHum; existing.atmoPress=_acqDraft.atmoPress;
     existing.atmoKp=_acqDraft.atmoKp; existing.atmoLat=_acqDraft.atmoLat; existing.atmoLon=_acqDraft.atmoLon;
+    if(_acqDraft.trajFile) existing.trajFile=_acqDraft.trajFile;
     existing.updatedAt=new Date().toISOString().slice(0,16);
     existing.updatedBy=CURRENT_USER||'?';
   } else {
@@ -2921,6 +2925,7 @@ function saveAcqFlight(){
       atmoAlt:_acqDraft.atmoAlt, atmoTemp:_acqDraft.atmoTemp,
       atmoHum:_acqDraft.atmoHum, atmoPress:_acqDraft.atmoPress,
       atmoKp:_acqDraft.atmoKp, atmoLat:_acqDraft.atmoLat, atmoLon:_acqDraft.atmoLon,
+      trajFile:_acqDraft.trajFile||null,
       acq_calcul_exp:null,acq_ctrl_caract:null,acq_ctrl_complet:null,acq_ctrl_prec:null,
       createdAt:new Date().toISOString().slice(0,16),
       createdBy:CURRENT_USER||'?',_edits:{}
@@ -2954,7 +2959,8 @@ function saveAcqFlight(){
 
 function quitAcqFlight(){
   if(!confirm('Quitter le formulaire ?\nLes données non enregistrées seront perdues.')) return;
-  _acqDraft={date:new Date().toISOString().split('T')[0],session:'',debut:'',fin:'',comment:'',tpsVol:'—'};
+  _acqDraft={date:new Date().toISOString().split('T')[0],session:'',debut:'',fin:'',comment:'',tpsVol:'—',
+    atmoAlt:'',atmoTemp:'',atmoHum:'',atmoPress:'',atmoKp:'',atmoLat:null,atmoLon:null,atmoFetching:false,trajFile:null};
   resetChrono();
   renderAcqNouveauVol();
 }
@@ -3026,6 +3032,17 @@ function openFlightLogDetail(id){
   html+=row('Début',l.dateDebut,true);
   html+=row('Fin',l.dateFin,true);
   html+=row('Durée',l.tpsVol,true);
+  if(l.trajFile&&l.trajFile.url){
+    html+=secTitle('Fichier trajectoire');
+    html+='<div style="display:flex;align-items:center;gap:10px;background:var(--surf2);border-radius:8px;padding:10px 14px;margin-bottom:6px">'
+      +'<span style="font-size:18px">📁</span>'
+      +'<div style="flex:1;min-width:0">'
+      +'<div style="font-size:12px;font-weight:600">'+l.trajFile.name+'</div>'
+      +'<div style="font-size:10px;color:var(--muted)">'+_formatSize(l.trajFile.size)+' · '+l.trajFile.uploadedBy+' · '+l.trajFile.uploadedAt.slice(0,10)+'</div>'
+      +'</div>'
+      +'<a href="'+l.trajFile.url+'" target="_blank" class="btn btn-secondary btn-sm" download>⬇ Télécharger</a>'
+      +'</div>';
+  }
 
   // Conditions atmosphériques
   var hasAtmo=l.atmoTemp||l.atmoAlt||l.atmoPress||l.atmoHum||l.atmoKp;
@@ -3485,6 +3502,155 @@ function _switchWindyOv(btn){
   _switchWindy(url, btn);
 }
 
+// ═══════════════════════════════════════════
+// CLOUDINARY — Fichiers Trajectoire
+// ═══════════════════════════════════════════
+var _CLOUD_NAME   = 'dvnaihnil';
+var _CLOUD_PRESET = 'KAD-SUIVI-PROJET';
+var _CLOUD_FOLDER = 'trajectoires';
+var _TRAJ_QUOTA_GB = 2.5;
+var _TRAJ_RETENTION_DAYS = 5;
+var _trajUploading = false;
+
+function _formatSize(bytes){
+  if(bytes>1e9) return (bytes/1e9).toFixed(1)+' Go';
+  if(bytes>1e6) return (bytes/1e6).toFixed(1)+' Mo';
+  return (bytes/1e3).toFixed(0)+' Ko';
+}
+
+// Rendu de la zone upload selon l'état de _acqDraft.trajFile
+function _trajUploadHtml(){
+  var f=_acqDraft.trajFile;
+  if(_trajUploading){
+    return '<div style="background:var(--surf2);border-radius:8px;padding:12px;text-align:center">'
+      +'<div id="traj-progress-bar" style="height:6px;background:#185FA5;border-radius:3px;width:0%;transition:width .3s;margin-bottom:8px"></div>'
+      +'<div id="traj-progress-txt" style="font-size:11px;color:var(--muted)">Envoi en cours…</div>'
+      +'</div>';
+  }
+  if(f&&f.url){
+    return '<div style="display:flex;align-items:center;gap:10px;background:var(--surf2);border-radius:8px;padding:10px 14px">'
+      +'<span style="font-size:18px">📁</span>'
+      +'<div style="flex:1;min-width:0">'
+      +'<div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+f.name+'</div>'
+      +'<div style="font-size:10px;color:var(--muted)">'+_formatSize(f.size)+' · Déposé par '+f.uploadedBy+' le '+f.uploadedAt.slice(0,10)+'</div>'
+      +'</div>'
+      +'<a href="'+f.url+'" target="_blank" class="btn btn-secondary btn-sm" download>⬇ Télécharger</a>'
+      +'<button onclick="_trajDelete()" class="btn btn-sm" style="border:0.5px solid var(--border);color:var(--err);background:none;cursor:pointer" title="Supprimer">🗑</button>'
+      +'</div>';
+  }
+  return '<label style="display:flex;flex-direction:column;align-items:center;gap:8px;padding:20px;border:1.5px dashed var(--border);border-radius:8px;cursor:pointer;background:var(--surf2);transition:border-color .15s" '
+    +'ondragover="event.preventDefault();this.style.borderColor=\'#185FA5\'" '
+    +'ondragleave="this.style.borderColor=\'var(--border)\'" '
+    +'ondrop="_trajDrop(event)">'
+    +'<span style="font-size:24px">📂</span>'
+    +'<span style="font-size:12px;color:var(--muted)">Glisser-déposer ou <span style="color:#185FA5;text-decoration:underline">parcourir</span></span>'
+    +'<input type="file" style="display:none" onchange="_trajPickFile(this.files[0])">'
+    +'</label>';
+}
+
+function _trajRefreshZone(){
+  var el=document.getElementById('traj-upload-zone');
+  if(el) el.innerHTML=_trajUploadHtml();
+}
+
+function _trajDrop(e){
+  e.preventDefault();
+  var file=(e.dataTransfer.files||[])[0];
+  if(file) _trajPickFile(file);
+}
+
+function _trajPickFile(file){
+  if(!file) return;
+  if(file.size > 300*1024*1024){ alert('Fichier trop volumineux (max 300 Mo).'); return; }
+  _trajUpload(file);
+}
+
+function _trajUpload(file){
+  if(_trajUploading) return;
+  _trajUploading=true; _trajRefreshZone();
+  var fd=new FormData();
+  fd.append('file',file);
+  fd.append('upload_preset',_CLOUD_PRESET);
+  fd.append('folder',_CLOUD_FOLDER);
+  fd.append('resource_type','raw');
+  var xhr=new XMLHttpRequest();
+  xhr.open('POST','https://api.cloudinary.com/v1_1/'+_CLOUD_NAME+'/raw/upload');
+  xhr.upload.onprogress=function(e){
+    if(!e.lengthComputable) return;
+    var pct=Math.round(e.loaded/e.total*100);
+    var bar=document.getElementById('traj-progress-bar');
+    var txt=document.getElementById('traj-progress-txt');
+    if(bar) bar.style.width=pct+'%';
+    if(txt) txt.textContent=pct+'% — '+_formatSize(e.loaded)+' / '+_formatSize(e.total);
+  };
+  xhr.onload=function(){
+    _trajUploading=false;
+    if(xhr.status===200){
+      var res=JSON.parse(xhr.responseText);
+      _acqDraft.trajFile={
+        url: res.secure_url,
+        publicId: res.public_id,
+        name: file.name,
+        size: file.size,
+        uploadedAt: new Date().toISOString().slice(0,16),
+        uploadedBy: CURRENT_USER||'?'
+      };
+      // Vérifier quota après upload
+      _trajCheckQuota();
+    } else {
+      alert('Erreur upload : '+xhr.status+'\n'+xhr.responseText);
+    }
+    _trajRefreshZone();
+  };
+  xhr.onerror=function(){
+    _trajUploading=false;
+    _trajRefreshZone();
+    alert('Erreur réseau lors de l\'upload.');
+  };
+  xhr.send(fd);
+}
+
+function _trajDelete(){
+  if(!_acqDraft.trajFile) return;
+  if(!confirm('Supprimer le fichier trajectoire ?')) return;
+  // Suppression via Cloudinary API nécessite un signed call (backend)
+  // On efface simplement la référence côté app
+  _acqDraft.trajFile=null;
+  _trajRefreshZone();
+}
+
+// Vérification quota + suppression des plus anciens si dépassement
+function _trajCheckQuota(){
+  if(!S.flightLogs) return;
+  var allFiles=S.flightLogs
+    .filter(function(l){return l.trajFile&&l.trajFile.size&&l.trajFile.uploadedAt;})
+    .sort(function(a,b){return a.trajFile.uploadedAt.localeCompare(b.trajFile.uploadedAt);});
+  var totalBytes=allFiles.reduce(function(s,l){return s+l.trajFile.size;},0);
+  var limitBytes=_TRAJ_QUOTA_GB*1024*1024*1024;
+  while(totalBytes>limitBytes&&allFiles.length>0){
+    var oldest=allFiles.shift();
+    totalBytes-=oldest.trajFile.size;
+    oldest.trajFile=null;
+    console.log('Quota trajectoire: fichier supprimé',oldest.session);
+  }
+}
+
+// Nettoyage des fichiers > 5 jours (appelé à l'ouverture de l'onglet Acquisition)
+function _trajCleanOld(){
+  if(!S.flightLogs) return;
+  var cutoff=new Date();
+  cutoff.setDate(cutoff.getDate()-_TRAJ_RETENTION_DAYS);
+  var changed=false;
+  S.flightLogs.forEach(function(l){
+    if(l.trajFile&&l.trajFile.uploadedAt){
+      if(new Date(l.trajFile.uploadedAt)<cutoff){
+        l.trajFile=null; changed=true;
+      }
+    }
+  });
+  if(changed) save();
+}
+
 // ════════════════════════════════════════════
 // JOURNAL DE VOL (LOG ACQUISITION)
 // ════════════════════════════════════════════
@@ -3886,6 +4052,7 @@ function openPhComments(lit, ph){
     +'<div class="fi-group"><div class="fi-lbl">Date</div><input type="date" class="fi" id="pc-date" value="'+new Date().toISOString().split('T')[0]+'"></div>'
     +'</div>'
     +'<div class="fi-group"><div class="fi-lbl">Commentaire</div><textarea class="ta" id="pc-text" placeholder="Décrire le commentaire…" style="min-height:60px"></textarea></div>'
+    +'<div style="display:flex;align-items:center;gap:8px;margin-top:10px"><input type="checkbox" id="pc-csv" style="width:14px;height:14px;cursor:pointer"><label for="pc-csv" style="font-size:11px;color:var(--muted);cursor:pointer">Inclure dans l\'export CSV</label></div>'
     +'<button class="btn btn-primary" onclick="addPhComment(\''+lE+'\',\''+ph+'\')" style="margin-top:8px">💬 Ajouter</button>'
     +'</div>';
 
