@@ -3042,15 +3042,17 @@ function openFlightLogDetail(id){
   html+=row('Début',l.dateDebut,true);
   html+=row('Fin',l.dateFin,true);
   html+=row('Durée',l.tpsVol,true);
-  if(l.trajFile&&l.trajFile.url){
+  if(l.trajFile&&(l.trajFile.path||l.trajFile.name)){
     html+=secTitle('Fichier trajectoire');
-    html+='<div style="display:flex;align-items:center;gap:10px;background:var(--surf2);border-radius:8px;padding:10px 14px;margin-bottom:6px">'
-      +'<span style="font-size:18px">📁</span>'
+    html+='<div style="background:var(--surf2);border-radius:8px;padding:10px 14px;margin-bottom:6px">'
+      +'<div style="display:flex;align-items:center;gap:8px">'
+      +'<span style="font-size:16px">📁</span>'
       +'<div style="flex:1;min-width:0">'
-      +'<div style="font-size:12px;font-weight:600">'+l.trajFile.name+'</div>'
-      +'<div style="font-size:10px;color:var(--muted)">'+_formatSize(l.trajFile.size)+' · '+l.trajFile.uploadedBy+' · '+l.trajFile.uploadedAt.slice(0,10)+'</div>'
+      +'<div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(l.trajFile.name||'')+'</div>'
+      +(l.trajFile.path?'<div style="font-size:10px;color:var(--muted);font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+l.trajFile.path+'</div>':'')
+      +(l.trajFile.analysed?'<div style="font-size:10px;color:#22c55e">✅ '+l.trajFile.analysed+'</div>':'')
       +'</div>'
-      +'<a href="'+l.trajFile.url+'" target="_blank" class="btn btn-secondary btn-sm" download>⬇ Télécharger</a>'
+      +'</div>'
       +'</div>';
   }
 
@@ -3653,12 +3655,7 @@ function _rawParseFile(arrayBuffer, onDone, onProgress){
 // ═══════════════════════════════════════════
 // CLOUDINARY — Fichiers Trajectoire
 // ═══════════════════════════════════════════
-var _CLOUD_NAME   = 'dvnaihnil';
-var _CLOUD_PRESET = 'KAD-SUIVI-PROJET';
-var _CLOUD_FOLDER = 'trajectoires';
-var _TRAJ_QUOTA_GB = 2.5;
-var _TRAJ_RETENTION_DAYS = 5;
-var _trajUploading = false;
+var _TRAJ_RETENTION_DAYS = 5; // Rétention des métadonnées trajectoire (jours)
 var _trajParsing   = false;  // parsing .raw en cours
 var _trajRawParsed = null;   // résultat du parsing
 
@@ -3668,39 +3665,36 @@ function _formatSize(bytes){
   return (bytes/1e3).toFixed(0)+' Ko';
 }
 
-// Rendu de la zone upload selon l'état de _acqDraft.trajFile
+// Rendu de la zone trajectoire (chemin réseau + analyse .raw)
 function _trajUploadHtml(){
-  var f=_acqDraft.trajFile;
-  if(_trajUploading){
-    return '<div style="background:var(--surf2);border-radius:8px;padding:12px;text-align:center">'
-      +'<div id="traj-progress-bar" style="height:6px;background:#185FA5;border-radius:3px;width:0%;transition:width .3s;margin-bottom:8px"></div>'
-      +'<div id="traj-progress-txt" style="font-size:11px;color:var(--muted)">Envoi en cours…</div>'
-      +'</div>';
-  }
+  var f = _acqDraft.trajFile;
   if(_trajParsing){
     return '<div style="background:var(--surf2);border-radius:8px;padding:12px;text-align:center">'
       +'<div style="font-size:11px;color:var(--muted)">🔍 Analyse du fichier .raw en cours…</div>'
       +'</div>';
   }
-  if(f&&f.url){
-    return '<div style="display:flex;align-items:center;gap:10px;background:var(--surf2);border-radius:8px;padding:10px 14px">'
-      +'<span style="font-size:18px">📁</span>'
-      +'<div style="flex:1;min-width:0">'
-      +'<div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+f.name+'</div>'
-      +'<div style="font-size:10px;color:var(--muted)">'+_formatSize(f.size)+' · Déposé par '+f.uploadedBy+' le '+f.uploadedAt.slice(0,10)+'</div>'
-      +'</div>'
-      +'<a href="'+f.url+'" target="_blank" class="btn btn-secondary btn-sm" download>⬇ Télécharger</a>'
-      +'<button onclick="_trajDelete()" class="btn btn-sm" style="border:0.5px solid var(--border);color:var(--err);background:none;cursor:pointer" title="Supprimer">🗑</button>'
-      +'</div>';
-  }
-  return '<label style="display:flex;flex-direction:column;align-items:center;gap:8px;padding:20px;border:1.5px dashed var(--border);border-radius:8px;cursor:pointer;background:var(--surf2);transition:border-color .15s" '
+  var pathVal = f ? (f.path||'') : '';
+  var nameVal = f ? (f.name||'') : '';
+  return '<div style="display:flex;flex-direction:column;gap:8px">'
+    // Champ chemin réseau
+    +'<div style="display:flex;gap:6px;align-items:center">'
+    +'<span style="font-size:16px">📁</span>'
+    +'<input type="text" class="fi" id="traj-path-inp" placeholder="P:\\VOL_250625\\250625_100608_INS-GPS_1.raw" '
+    +'style="flex:1;font-family:monospace;font-size:11px" value="'+pathVal.replace(/"/g,'&quot;')+'" '
+    +'onchange="_trajSetPath(this.value)" oninput="_trajSetPath(this.value)">'
+    +(pathVal ? '<button onclick="_trajClearPath()" style="border:0.5px solid var(--border);background:none;color:var(--err);cursor:pointer;border-radius:5px;padding:3px 8px;font-size:11px">✕</button>' : '')
+    +'</div>'
+    // Zone drag & drop pour analyse uniquement (pas d'upload)
+    +'<label style="display:flex;align-items:center;gap:10px;padding:10px 14px;border:1.5px dashed var(--border);border-radius:8px;cursor:pointer;background:var(--surf2);transition:border-color .15s;font-size:11px;color:var(--muted)" '
     +'ondragover="event.preventDefault();this.style.borderColor=\'#185FA5\'" '
     +'ondragleave="this.style.borderColor=\'var(--border)\'" '
     +'ondrop="_trajDrop(event)">'
-    +'<span style="font-size:24px">📂</span>'
-    +'<span style="font-size:12px;color:var(--muted)">Glisser-déposer ou <span style="color:#185FA5;text-decoration:underline">parcourir</span></span>'
-    +'<input type="file" style="display:none" onchange="_trajPickFile(this.files[0])">'
-    +'</label>';
+    +'<span style="font-size:18px">🔍</span>'
+    +'<span>Glisser le fichier <b>.raw</b> ici pour l\'analyser <span style="color:var(--muted)">(pas d\'upload — analyse locale uniquement)</span></span>'
+    +'<input type="file" accept=".raw" style="display:none" onchange="_trajPickFile(this.files[0])">'
+    +'</label>'
+    +(f&&f.analysed ? '<div style="font-size:10px;color:#22c55e;padding:4px 0">✅ '+f.analysed+'</div>' : '')
+    +'</div>';
 }
 
 function _trajRefreshZone(){
@@ -3716,100 +3710,53 @@ function _trajDrop(e){
 
 function _trajPickFile(file){
   if(!file) return;
-  if(file.size > 300*1024*1024){ alert('Fichier trop volumineux (max 300 Mo).'); return; }
-  // Si fichier .raw → parser en parallèle de l'upload
   var ext = file.name.split('.').pop().toLowerCase();
-  if(ext === 'raw'){
-    var reader = new FileReader();
-    reader.onload = function(e){
-      _trajParsing = true; _trajRefreshZone();
-      _rawParseFile(e.target.result, function(parsed, err){
-        _trajParsing = false;
-        _trajRawParsed = parsed;
-        if(err){ console.warn('RAW parse error:', err); }
-        _trajRefreshZone();
-      }, null);
-    };
-    reader.readAsArrayBuffer(file);
-  }
-  _trajUpload(file);
+  if(ext !== 'raw'){ alert('Seuls les fichiers .raw sont acceptés pour l\'analyse.'); return; }
+  // Remplir automatiquement le champ chemin avec le nom du fichier
+  if(!_acqDraft.trajFile) _acqDraft.trajFile = {};
+  _acqDraft.trajFile.name = file.name;
+  // Parser le fichier
+  var reader = new FileReader();
+  reader.onload = function(e){
+    _trajParsing = true; _trajRefreshZone();
+    _rawParseFile(e.target.result, function(parsed, err){
+      _trajParsing = false;
+      _trajRawParsed = parsed;
+      if(parsed){
+        if(!_acqDraft.trajFile) _acqDraft.trajFile = {};
+        _acqDraft.trajFile.name = file.name;
+        _acqDraft.trajFile.analysed = parsed.axes.length + ' axe(s) détecté(s) · ' + parsed.t_start + '→' + parsed.t_end;
+      }
+      if(err){ console.warn('RAW parse error:', err); }
+      _trajRefreshZone();
+    }, null);
+  };
+  reader.readAsArrayBuffer(file);
 }
 
-function _trajUpload(file){
-  if(_trajUploading) return;
-  _trajUploading=true; _trajRefreshZone();
-  var fd=new FormData();
-  fd.append('file',file);
-  fd.append('upload_preset',_CLOUD_PRESET);
-  fd.append('folder',_CLOUD_FOLDER);
-  fd.append('resource_type','raw');
-  var xhr=new XMLHttpRequest();
-  xhr.open('POST','https://api.cloudinary.com/v1_1/'+_CLOUD_NAME+'/raw/upload');
-  xhr.upload.onprogress=function(e){
-    if(!e.lengthComputable) return;
-    var pct=Math.round(e.loaded/e.total*100);
-    var bar=document.getElementById('traj-progress-bar');
-    var txt=document.getElementById('traj-progress-txt');
-    if(bar) bar.style.width=pct+'%';
-    if(txt) txt.textContent=pct+'% — '+_formatSize(e.loaded)+' / '+_formatSize(e.total);
-  };
-  xhr.onload=function(){
-    _trajUploading=false;
-    if(xhr.status===200){
-      var res=JSON.parse(xhr.responseText);
-      _acqDraft.trajFile={
-        url: res.secure_url,
-        publicId: res.public_id,
-        name: file.name,
-        size: file.size,
-        uploadedAt: new Date().toISOString().slice(0,16),
-        uploadedBy: CURRENT_USER||'?'
-      };
-      // Déclencher l'analyse si le parsing .raw est terminé
-      if(_trajRawParsed){
-        var logId = _acqDraft.session || ('draft_'+Date.now());
-        _analyzeTrajAndAlert(_trajRawParsed, logId);
-        _trajRawParsed = null;
-      }
-      // Vérifier quota après upload
-      _trajCheckQuota();
-    } else {
-      alert('Erreur upload : '+xhr.status+'\n'+xhr.responseText);
-    }
-    _trajRefreshZone();
-  };
-  xhr.onerror=function(){
-    _trajUploading=false;
-    _trajRefreshZone();
-    alert('Erreur réseau lors de l\'upload.');
-  };
-  xhr.send(fd);
-}
+// Upload supprimé — stockage par chemin réseau uniquement
 
 function _trajDelete(){
-  if(!_acqDraft.trajFile) return;
-  if(!confirm('Supprimer le fichier trajectoire ?')) return;
-  // Suppression via Cloudinary API nécessite un signed call (backend)
-  // On efface simplement la référence côté app
+  if(!confirm('Supprimer la référence trajectoire ?')) return;
   _acqDraft.trajFile=null;
   _trajRefreshZone();
 }
 
-// Vérification quota + suppression des plus anciens si dépassement
-function _trajCheckQuota(){
-  if(!S.flightLogs) return;
-  var allFiles=S.flightLogs
-    .filter(function(l){return l.trajFile&&l.trajFile.size&&l.trajFile.uploadedAt;})
-    .sort(function(a,b){return a.trajFile.uploadedAt.localeCompare(b.trajFile.uploadedAt);});
-  var totalBytes=allFiles.reduce(function(s,l){return s+l.trajFile.size;},0);
-  var limitBytes=_TRAJ_QUOTA_GB*1024*1024*1024;
-  while(totalBytes>limitBytes&&allFiles.length>0){
-    var oldest=allFiles.shift();
-    totalBytes-=oldest.trajFile.size;
-    oldest.trajFile=null;
-    console.log('Quota trajectoire: fichier supprimé',oldest.session);
-  }
+function _trajSetPath(val){
+  if(!_acqDraft.trajFile) _acqDraft.trajFile={};
+  _acqDraft.trajFile.path = val.trim();
+  // Extraire le nom du fichier depuis le chemin
+  var parts = val.replace(/\\/g,'/').split('/');
+  _acqDraft.trajFile.name = parts[parts.length-1]||val;
 }
+
+function _trajClearPath(){
+  _acqDraft.trajFile = null;
+  _trajRawParsed = null;
+  _trajRefreshZone();
+}
+
+
 
 // Nettoyage des fichiers > 5 jours (appelé à l'ouverture de l'onglet Acquisition)
 function _trajCleanOld(){
