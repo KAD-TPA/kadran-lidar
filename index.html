@@ -1437,6 +1437,8 @@ function save(){
       flightLogs: S.flightLogs || [],
       acqSettings: S.acqSettings || {},
       acqContacts: S.acqContacts || [],
+      consignes: S.consignes || [],
+      settings: S.settings || {},
       cadNotes: S.cadNotes || '',
       _ts: _ts
     };
@@ -1547,6 +1549,8 @@ function _fbListenerFn(snapshot){
   if(remote.phaseComments) S.phaseComments = remote.phaseComments;
   if(remote.flightLogs) S.flightLogs = remote.flightLogs;
   if(remote.acqSettings) S.acqSettings = remote.acqSettings;
+  if(remote.settings)    S.settings    = remote.settings;
+  if(remote.consignes)   S.consignes   = remote.consignes;
   if(remote.acqContacts) S.acqContacts = remote.acqContacts;
 
   showAS('online');
@@ -4077,6 +4081,8 @@ function _litTrtBrutBlocked(litName) {
 // Source : raf20.ggf — IGN Géodésie
 // ═══════════════════════════════════════════
 
+var _RAF20_loading = null;  // Promise de chargement de la grille RAF20
+
 var _RAF20 = (function(){
   var NROWS=421, NCOLS=381;
   var LAT_MAX=51.5, LAT_MIN=42.0, LON_MIN=-5.5, LON_MAX=8.5;
@@ -4111,7 +4117,7 @@ var _RAF20 = (function(){
             chunks.push(r.value); return pump();
           });
         }
-        _RAF20._loading = pump();
+        _RAF20_loading = pump();  // module-level, accessible avant _RAF20
       }
     }catch(e){ console.warn('RAF20 load error:',e); }
   }
@@ -4129,13 +4135,13 @@ var _RAF20 = (function(){
   }
 
   _load();
-  return { getN:getN, _loading:null };
+  return { getN:getN };
 })();
 
 // Attendre que RAF20 soit chargé avant l'analyse
 async function _waitRAF20(){
-  if(!_RAF20._loading) return;
-  try{ await _RAF20._loading; }catch(e){}
+  if(!_RAF20_loading) return;
+  try{ await _RAF20_loading; }catch(e){}
 }
 
 // ═══════════════════════════════════════════
