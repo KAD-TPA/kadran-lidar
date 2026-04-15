@@ -7776,7 +7776,7 @@ function confirmDeleteProject(pid){
   }
   // Remove from PROJECTS array (never remove index 0 = Lot G)
   var idx=PROJECTS.findIndex(function(p){return p.id===pid;});
-  if(idx<=0){if(err)err.textContent='Ce projet ne peut pas \u00eatre supprim\u00e9.';return;}
+  if(idx<0){if(err)err.textContent='Projet introuvable.';return;}
   PROJECTS.splice(idx,1);
   // Supprimer du localStorage
   try{
