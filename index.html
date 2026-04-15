@@ -274,6 +274,117 @@ tr:hover td{background:var(--surf2);}
 .svg-tip{position:fixed;background:#1a1d23;color:#fff;font-size:11px;padding:5px 9px;border-radius:6px;pointer-events:none;z-index:9000;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,.3);display:none;}
 .svg-tip.show{display:block;}
 
+
+/* ═══════════════════════════════════════════
+   RESPONSIVE MOBILE  (< 768px)
+   ═══════════════════════════════════════════ */
+
+/* Bouton hamburger (visible mobile seulement) */
+.mob-menu-btn{display:none;background:none;border:none;cursor:pointer;padding:6px;border-radius:6px;color:var(--txt);font-size:20px;line-height:1;flex-shrink:0;}
+.mob-menu-btn:hover{background:var(--surf2);}
+
+/* Overlay sidebar */
+.sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:199;}
+.sidebar-overlay.open{display:block;}
+
+@media (max-width: 767px){
+
+  /* ── Layout principal ── */
+  .app{flex-direction:column;}
+  .sidebar{
+    position:fixed;top:0;left:0;bottom:0;
+    width:260px;max-width:85vw;
+    transform:translateX(-100%);
+    transition:transform .25s ease;
+    z-index:200;
+    box-shadow:4px 0 20px rgba(0,0,0,.18);
+  }
+  .sidebar.mob-open{transform:translateX(0);}
+  .mob-menu-btn{display:flex;align-items:center;justify-content:center;}
+  .main{width:100%;min-height:0;}
+  .topbar{padding:0 10px;height:48px;}
+  .topbar #tb-title{font-size:14px;}
+  .page-scroll{padding:10px 10px 70px;}  /* pb pour bottom nav */
+
+  /* ── Bottom nav pour les 5 vues clés ── */
+  .mob-bottom-nav{
+    display:flex;
+    position:fixed;bottom:0;left:0;right:0;
+    height:58px;background:var(--surface);
+    border-top:1px solid var(--border);
+    z-index:100;box-shadow:0 -2px 8px rgba(0,0,0,.08);
+  }
+  .mob-nav-item{
+    flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:2px;cursor:pointer;font-size:9px;font-weight:600;color:var(--muted);
+    padding:6px 2px;border:none;background:none;font-family:inherit;
+    transition:color .12s;-webkit-tap-highlight-color:transparent;
+  }
+  .mob-nav-item .mn-ic{font-size:18px;line-height:1;}
+  .mob-nav-item.active{color:var(--red);}
+  .mob-nav-item .mn-badge{
+    position:absolute;top:4px;right:50%;margin-right:-18px;
+    background:var(--red);color:#fff;border-radius:10px;
+    font-size:8px;padding:1px 4px;font-weight:700;
+  }
+  .mob-nav-item{position:relative;}
+
+  /* ── Cards ── */
+  .card-head{padding:8px 11px;flex-wrap:wrap;}
+  .card-body{padding:10px 11px;}
+  .card-title{font-size:12px;}
+
+  /* ── Boutons ── */
+  .btn{padding:8px 12px;font-size:12px;}
+  .btn-sm{padding:5px 9px;font-size:11px;}
+
+  /* ── Inputs ── */
+  .fi,.fsel{font-size:13px;padding:8px 10px;}
+
+  /* ── Tables : scroll horizontal ── */
+  .tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+  table{min-width:500px;}
+
+  /* ── Stats row ── */
+  .stats-row{grid-template-columns:repeat(2,1fr) !important;}
+
+  /* ── Dashboard ── */
+  #view-dashboard .stats-row .stat-card{min-width:0;}
+
+  /* ── Carte map ── */
+  #view-carte > div{flex-direction:column !important;height:auto !important;}
+  #view-carte > div > div:first-child{width:100% !important;min-width:0 !important;max-height:40vh;overflow-y:auto;}
+  #map-svg-wrap{height:55vh !important;border-radius:var(--r);}
+  #traj-map-panel{top:6px;right:6px;width:190px;font-size:10px;}
+
+  /* ── Modal ── */
+  .modal,.modal-lg{width:96vw !important;max-height:93vh;}
+
+  /* ── Phases tableau ── */
+  #view-phases .card{margin-bottom:8px;}
+
+  /* ── Gantt ── */
+  .gantt-head-lbl,.g-lbl,.gantt-days-spacer{width:120px !important;min-width:120px !important;font-size:10px;}
+
+  /* ── Filtres ── */
+  .filters{flex-wrap:wrap;gap:5px;}
+  .filters .finp,.filters .fsel{font-size:11px;}
+
+  /* ── Phase tabs ── */
+  .tabs{overflow-x:auto;padding:3px;}
+  .tab{font-size:11px;padding:5px 9px;white-space:nowrap;}
+
+  /* ── Acquisition form ── */
+  #view-acquisition .fg{grid-template-columns:1fr !important;}
+  #view-acquisition .fi-group{width:100%;}
+
+  /* ── Autosave badge ── */
+  .autosave{bottom:66px !important;right:8px !important;}
+}
+
+@media (min-width:768px){
+  .mob-bottom-nav{display:none;}
+}
 </style>
 
 <!-- ShapefileJS for reading .zip shapefiles -->
@@ -333,9 +444,32 @@ tr:hover td{background:var(--surf2);}
   </nav>
 </aside>
 
+    <!-- Overlay sidebar mobile -->
+    <div class="sidebar-overlay" id="mob-sidebar-overlay" onclick="_mobCloseSidebar()"></div>
+
+    <!-- Bottom nav mobile -->
+    <nav class="mob-bottom-nav" id="mob-bottom-nav">
+      <button class="mob-nav-item" data-view="dashboard" onclick="nav('dashboard',this.closest('.mob-bottom-nav').querySelector('[data-view=dashboard]'));_mobSetBottomActive('dashboard')">
+        <span class="mn-ic">📊</span><span>Tableau</span>
+      </button>
+      <button class="mob-nav-item" data-view="lits" onclick="nav('lits',null);_mobSetBottomActive('lits')">
+        <span class="mn-ic">📋</span><span>LITs</span>
+      </button>
+      <button class="mob-nav-item" data-view="acquisition" onclick="nav('acquisition',null);_mobSetBottomActive('acquisition')">
+        <span class="mn-ic">✈️</span><span>Acq.</span>
+      </button>
+      <button class="mob-nav-item" data-view="phases" onclick="nav('phases',null);_mobSetBottomActive('phases')">
+        <span class="mn-ic">⚙️</span><span>Phases</span>
+      </button>
+      <button class="mob-nav-item" onclick="_mobToggleSidebar()">
+        <span class="mn-ic">☰</span><span>Plus</span>
+      </button>
+    </nav>
+
 <!-- MAIN -->
 <div class="main">
   <div class="topbar">
+      <button class="mob-menu-btn" onclick="_mobToggleSidebar()" aria-label="Menu">☰</button>
     <div class="tb-title" id="tb-title">Tableau de bord</div>
     <div class="tb-actions">
       <button class="btn btn-secondary btn-sm" onclick="goHome()" title="Retour à la sélection de projet" style="gap:5px">🏠 Projets</button>
@@ -5816,10 +5950,10 @@ function _ignRunNext(){
         return r.json();
       })
       .then(function(d){
-        if(!d) return;
-        var alts=(d.elevations||[]).map(function(e){
-          return typeof e === 'number' ? e : parseFloat(e.z !== undefined ? e.z : e)||0;
-        });
+        // Toujours appeler cb — sinon la Promise await reste bloquée
+        var alts = d && d.elevations
+          ? d.elevations.map(function(e){ return typeof e==='number' ? e : parseFloat(e.z!==undefined?e.z:e)||0; })
+          : [];
         job.cb(alts, null);
         setTimeout(function(){ _ignRunning=false; _ignRunNext(); }, _IGN_DELAY_MS);
       })
@@ -5866,7 +6000,14 @@ async function _analyzeAxis(ax, params){
     var _lats  = _batch.map(function(s){ return s.lat_mid.toFixed(6); });
     var _lons  = _batch.map(function(s){ return s.lon_mid.toFixed(6); });
     await new Promise(function(res){
+      var _done = false;
+      var _timeout = setTimeout(function(){
+        if(!_done){ _done=true; res(); } // timeout 15s de sécurité
+      }, 15000);
       _fetchIgnElevBatch(_lats, _lons, function(alts, err){
+        if(_done) return;
+        _done = true;
+        clearTimeout(_timeout);
         _batch.forEach(function(s,j){ s.alt_terrain = alts ? (alts[j]||0) : 0; });
         res();
       });
@@ -5942,7 +6083,17 @@ async function _analyzeTrajAndAlert(parsedRaw, logId){
 
   // Analyser chaque axe
   var allAnalysis = [], anyWarn = false;
+  // Feedback visuel pendant l'analyse
+  function _setAnalysisTxt(msg){
+    var el=document.getElementById('traj-copy-txt');
+    if(el) el.textContent=msg;
+    var prog=document.getElementById('traj-copy-progress');
+    if(prog) prog.style.display='block';
+  }
+  _setAnalysisTxt('Analyse en cours (0 / '+parsedRaw.axes.length+' axe(s))…');
+
   for(var i=0;i<parsedRaw.axes.length;i++){
+    _setAnalysisTxt('Analyse axe '+(i+1)+' / '+parsedRaw.axes.length+' — récupération MNT IGN…');
     var ax  = parsedRaw.axes[i];
     var ana = await _analyzeAxis(ax, mergedParams);
     if(ana){
@@ -9619,6 +9770,49 @@ function ctrlExportReport(){
   function _doInit(){ try{loadSavedProjects();renderProjectScreen();}catch(e){} }
   if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',_doInit);}else{_doInit();}
 })();
+
+// ═══════════════════════════════════════════
+// NAVIGATION MOBILE
+// ═══════════════════════════════════════════
+function _mobToggleSidebar(){
+  var sb = document.querySelector('.sidebar');
+  var ov = document.getElementById('mob-sidebar-overlay');
+  if(!sb) return;
+  var open = sb.classList.toggle('mob-open');
+  if(ov) ov.classList.toggle('open', open);
+  document.body.style.overflow = open ? 'hidden' : '';
+}
+function _mobCloseSidebar(){
+  var sb = document.querySelector('.sidebar');
+  var ov = document.getElementById('mob-sidebar-overlay');
+  if(sb) sb.classList.remove('mob-open');
+  if(ov) ov.classList.remove('open');
+  document.body.style.overflow = '';
+}
+function _mobSetBottomActive(viewId){
+  document.querySelectorAll('.mob-nav-item[data-view]').forEach(function(el){
+    el.classList.toggle('active', el.getAttribute('data-view')===viewId);
+  });
+}
+// Fermer sidebar mobile lors d'un clic sur un .ni
+document.addEventListener('click', function(e){
+  var ni = e.target.closest('.ni');
+  if(ni && window.innerWidth < 768) _mobCloseSidebar();
+});
+// Sync bottom nav quand nav() est appelé
+var _origNav = null;
+(function patchNav(){
+  if(typeof nav === 'function'){
+    _origNav = nav;
+    nav = function(id, el){
+      _origNav(id, el);
+      _mobSetBottomActive(id);
+    };
+  } else {
+    setTimeout(patchNav, 100);
+  }
+})();
+
 </script>
 
 
