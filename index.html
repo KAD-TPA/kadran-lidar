@@ -1565,14 +1565,26 @@ function _attachFbListener(){
 }
 
 // Listener de connexion (une seule fois)
+// Délai pour éviter les faux positifs au démarrage et lors des reconnexions
+var _offlineTimer = null;
 if(db){
   db.ref('.info/connected').on('value', function(snap){
-    if(!snap.val()){
-      showAS('error');
-      document.getElementById('as-txt').textContent = 'Hors ligne';
-      document.getElementById('as-icon').textContent = '🔴';
-    } else if(_fbLoaded){
-      showAS('online');
+    if(snap.val()){
+      // Connecté : annuler le timer offline et afficher online
+      clearTimeout(_offlineTimer);
+      _offlineTimer = null;
+      if(_fbLoaded) showAS('online');
+    } else {
+      // Déconnecté : attendre 4s avant d'afficher "hors ligne"
+      // (évite les faux positifs au démarrage et reconnexions rapides)
+      clearTimeout(_offlineTimer);
+      _offlineTimer = setTimeout(function(){
+        showAS('error');
+        var txt = document.getElementById('as-txt');
+        var ico = document.getElementById('as-icon');
+        if(txt) txt.textContent = 'Hors ligne';
+        if(ico) ico.textContent = '🔴';
+      }, 4000);
     }
   });
 }
