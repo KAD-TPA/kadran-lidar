@@ -7778,13 +7778,19 @@ function confirmDeleteProject(pid){
   var idx=PROJECTS.findIndex(function(p){return p.id===pid;});
   if(idx<=0){if(err)err.textContent='Ce projet ne peut pas \u00eatre supprim\u00e9.';return;}
   PROJECTS.splice(idx,1);
-  // Remove from localStorage
+  // Supprimer du localStorage
   try{
     var sv=JSON.parse(localStorage.getItem('kadran_projects')||'[]');
     sv=sv.filter(function(p){return p.id!==pid;});
     localStorage.setItem('kadran_projects',JSON.stringify(sv));
   }catch(e){}
-  // Remove overlay and re-render
+  // Supprimer de Firebase (registry + données)
+  if(db){
+    try{ db.ref('kadran_registry/'+pid).remove(); }catch(e){}
+    // Optionnel : supprimer aussi les données Firebase du projet
+    // try{ db.ref(proj.dbRef).remove(); }catch(e){}
+  }
+  // Fermer overlay et rafraîchir
   var ov=document.getElementById('delete-proj-overlay');
   if(ov)ov.remove();
   renderProjectScreen();
