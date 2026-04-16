@@ -1278,7 +1278,7 @@ tr:hover td{background:var(--surf2);}
   </div>
 </div>
 
-<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
+<script>
 
 // ── TRIGRAMME ──
 var CURRENT_USER = '';
@@ -8041,6 +8041,16 @@ function selectProject(id){
     if(db && proj.dbRef){
       DB_REF = db.ref(proj.dbRef);
       _attachFbListener();
+      // Si les LITs viennent de venir du shapefile local et que Firebase
+      // n'a pas encore de données pour ce projet → les pousser
+      DB_REF.once('value', function(snap){
+        var remote = snap.val();
+        if(!remote || !remote.data || !remote.data.length){
+          if(S.data && S.data.length) {
+            setTimeout(save, 500); // push initial des LITs vers Firebase
+          }
+        }
+      });
     }
   }
   // Update sidebar badge immediately with real LIT counts
@@ -8697,6 +8707,12 @@ function npCreate(){
   }, _projData);
   PROJECTS.push(newProj);
   _pushProjectToRegistry(newProj); // localStorage + Firebase registry
+  // Sélectionner immédiatement le projet pour peupler S.data depuis _lits
+  // puis sauvegarder S.data dans Firebase (pour que les autres navigateurs voient les LITs)
+  selectProject(newProj.id);
+  setTimeout(function(){
+    save(); // pousse S.data vers Firebase/{dbRef}/data
+  }, 800); // délai pour laisser _attachFbListener se connecter
   closeNewProjectModal();
   renderProjectScreen();
   alert('&#x2705; Projet "'+newProj.name+'" créé avec succès !');
