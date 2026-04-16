@@ -8007,54 +8007,69 @@ function selectProject(id){
   localStorage.removeItem('k5_trigram');
   CURRENT_USER = '';
   READ_ONLY = false;
-  // If custom project (not the default), load its LITs into S.data
-  if(proj._lits && proj._lits.length){
-    S.data = proj._lits.map(function(l){ return Object.assign({},l); });
-    S.deliveries     = [];
-    S.reprises       = [];
-    S.cadNotes       = '';
-    S.consignes      = [];
-    S.settings       = {};
-    S.flightLogs     = [];
-    S.phaseComments  = [];
-    S.acqSettings    = {};
-    S.acqContacts    = [];
-    // Vider le cache géométries LIT (spécifique au projet)
-    _litWgs84Cache = {};
-    // Try load from localStorage for this project
-    try {
-      var local = JSON.parse(localStorage.getItem('kadran_'+proj.dbRef)||'null');
-      if(local && local.data && local.data.length) {
-        S.data = local.data;
-        if(local.deliveries)   S.deliveries   = local.deliveries;
-        if(local.reprises)     S.reprises     = local.reprises;
-        if(local.cadNotes !== undefined) S.cadNotes = local.cadNotes;
-        if(local.consignes)    S.consignes    = local.consignes;
-        if(local.flightLogs)   S.flightLogs   = local.flightLogs;
-        if(local.phaseComments) S.phaseComments = local.phaseComments;
-        if(local.acqSettings)  S.acqSettings  = local.acqSettings;
-        if(local.acqContacts)  S.acqContacts  = local.acqContacts;
-      }
-    } catch(e){}
-    // Update DB_REF et réattacher le listener sur la nouvelle ref
-    if(db && proj.dbRef){
-      DB_REF = db.ref(proj.dbRef);
-      _attachFbListener();
-      // Si les LITs viennent de venir du shapefile local et que Firebase
-      // n'a pas encore de données pour ce projet → les pousser
-      DB_REF.once('value', function(snap){
-        var remote = snap.val();
-        if(!remote || !remote.data || !remote.data.length){
-          if(S.data && S.data.length) {
-            setTimeout(save, 500); // push initial des LITs vers Firebase
-          }
-        }
-        // Pousser le GeoJSON si pas encore sur Firebase
-        if((!remote || !remote.geojson) && proj._geojson && proj._geojson.features && proj._geojson.features.length){
-          try{ DB_REF.child('geojson').set(proj._geojson); }catch(e){}
-        }
-      });
+  // ── Réinitialiser l'état du projet ──
+  _litWgs84Cache = {};
+  // Charger depuis localStorage si disponible
+  var _localLoaded = false;
+  try {
+    var local = JSON.parse(localStorage.getItem('kadran_'+proj.dbRef)||'null');
+    if(local && local.data && local.data.length) {
+      S.data          = local.data;
+      S.deliveries    = local.deliveries   || [];
+      S.reprises      = local.reprises     || [];
+      S.cadNotes      = local.cadNotes !== undefined ? local.cadNotes : '';
+      S.consignes     = local.consignes    || [];
+      S.settings      = local.settings     || {};
+      S.flightLogs    = local.flightLogs   || [];
+      S.phaseComments = local.phaseComments|| [];
+      S.acqSettings   = local.acqSettings  || {};
+      S.acqContacts   = local.acqContacts  || [];
+      _localLoaded = true;
     }
+  } catch(e){}
+
+  // Si pas en localStorage, charger depuis _lits du projet (shapefile local)
+  if(!_localLoaded && proj._lits && proj._lits.length){
+    S.data          = proj._lits.map(function(l){ return Object.assign({},l); });
+    S.deliveries    = [];
+    S.reprises      = [];
+    S.cadNotes      = '';
+    S.consignes     = [];
+    S.settings      = {};
+    S.flightLogs    = [];
+    S.phaseComments = [];
+    S.acqSettings   = {};
+    S.acqContacts   = [];
+  }
+
+  // Si pas de données locales du tout → Firebase sera la seule source
+  if(!_localLoaded && (!proj._lits || !proj._lits.length)){
+    S.data          = [];
+    S.deliveries    = [];
+    S.reprises      = [];
+    S.cadNotes      = '';
+    S.consignes     = [];
+    S.settings      = {};
+    S.flightLogs    = [];
+    S.phaseComments = [];
+    S.acqSettings   = {};
+    S.acqContacts   = [];
+  }
+
+  // ── TOUJOURS attacher le listener Firebase ──
+  if(db && proj.dbRef){
+    DB_REF = db.ref(proj.dbRef);
+    _attachFbListener();
+    // Push initial si Firebase vide et données locales disponibles
+    DB_REF.once('value', function(snap){
+      var remote = snap.val();
+      if(!remote || !remote.data || !remote.data.length){
+        if(S.data && S.data.length) setTimeout(save, 500);
+      }
+      if((!remote || !remote.geojson) && proj._geojson && proj._geojson.features && proj._geojson.features.length){
+        try{ DB_REF.child('geojson').set(proj._geojson); }catch(e){}
+      }
+    });
   }
   // Update sidebar badge immediately with real LIT counts
   updateSidebarBadge();
