@@ -1566,6 +1566,21 @@ function _attachFbListener(){
   _fbLoaded = false;
   _lastSaveTs = 0;
   DB_REF.on('value', _fbListenerFn);
+  // Listener séparé pour le GeoJSON (évite de le mettre dans chaque save())
+  DB_REF.child('geojson').on('value', function(snap){
+    var geo = snap.val();
+    if(geo && geo.features && geo.features.length){
+      if(!MAP_GEOJSON || !MAP_GEOJSON.features || !MAP_GEOJSON.features.length){
+        MAP_GEOJSON = geo;
+        if(ACTIVE_PROJECT) ACTIVE_PROJECT._geojson = geo;
+        // Rafraîchir la carte si elle est active
+        var active = document.querySelector('.view.active');
+        if(active && active.id === 'view-carte' && typeof renderMapSvg === 'function'){
+          setTimeout(function(){ initMap(); buildMapLegend(); updateMapCount(); }, 100);
+        }
+      }
+    }
+  });
 }
 
 // Listener de connexion (une seule fois)
@@ -7953,11 +7968,11 @@ function confirmDeleteProject(pid){
     sv=sv.filter(function(p){return p.id!==pid;});
     localStorage.setItem('kadran_projects',JSON.stringify(sv));
   }catch(e){}
-  // Supprimer de Firebase (registry + données)
+  // Supprimer de Firebase (registry + données du projet)
+  var deletedDbRef = proj ? proj.dbRef : pid;
   if(db){
     try{ db.ref('kadran_registry/'+pid).remove(); }catch(e){}
-    // Optionnel : supprimer aussi les données Firebase du projet
-    // try{ db.ref(proj.dbRef).remove(); }catch(e){}
+    try{ db.ref(deletedDbRef).remove(); }catch(e){} // supprime les données du projet
   }
   // Fermer overlay et rafraîchir
   var ov=document.getElementById('delete-proj-overlay');
@@ -8049,6 +8064,10 @@ function selectProject(id){
           if(S.data && S.data.length) {
             setTimeout(save, 500); // push initial des LITs vers Firebase
           }
+        }
+        // Pousser le GeoJSON si pas encore sur Firebase
+        if((!remote || !remote.geojson) && proj._geojson && proj._geojson.features && proj._geojson.features.length){
+          try{ DB_REF.child('geojson').set(proj._geojson); }catch(e){}
         }
       });
     }
