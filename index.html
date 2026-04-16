@@ -4344,6 +4344,7 @@ function _trajUploadHtml(){
       +(analysed?'<div style="font-size:10px;color:#22c55e">✅ '+analysed+'</div>':'')
       +'</div>'
       +'<button onclick="_trajClearPath()" style="border:0.5px solid var(--border);background:none;color:var(--err);cursor:pointer;border-radius:5px;padding:3px 8px;font-size:11px" title="Supprimer">🗑</button>'
+      +'<div style="margin-top:8px">'      +'<button onclick="_trajReplaceMode()" style="width:100%;padding:7px;border-radius:6px;border:1.5px dashed var(--blue);background:none;color:var(--blue);cursor:pointer;font-size:11px;font-weight:600">🔄 Remplacer / Re-analyser</button>'      +'</div>'
       +'</div>';
   }
 
@@ -4449,6 +4450,12 @@ function _trajRefreshZone(){
   }
 }
 
+function _trajReplaceMode(){
+  // Efface le fichier actuel et affiche l'interface d'upload complète
+  _acqDraft.trajFile = null;
+  _trajRawParsed = null;
+  _trajRefreshZone();
+}
 function _trajDelete(){
   if(!confirm('Supprimer la référence trajectoire ?')) return;
   _acqDraft.trajFile=null;
