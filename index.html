@@ -1514,32 +1514,16 @@ function _fbListenerFn(snapshot){
   _fbLoaded = true;
 
   if(remote.data && Array.isArray(remote.data) && remote.data.length > 0){
-    var sample = remote.data[0];
-    var hasStatus = sample.gen_lidar_brut !== undefined || sample.calc_traj !== undefined || sample.import_dalles !== undefined;
-    if(hasStatus){
-      S.data = remote.data;
-      S.data.forEach(function(d){
-        if(!d._edits) d._edits = {};
-        EDITABLE_FIELDS.forEach(function(k){
-          if(d[k] !== null && d[k] !== undefined && !d._edits[k]){
-            d._edits[k] = {by:'TPA', at:'2026-02-19 00:00'};
-          }
-        });
-      });
-    } else {
-      // remote.data existe mais sans les champs statut
-      // Si S.data est déjà peuplé (depuis _lits), conserver
-      // Sinon utiliser remote.data tel quel (LITs sans statuts)
-      if(!S.data || !S.data.length){
-        if(Array.isArray(remote.data) && remote.data.length){
-          S.data = remote.data;
+    // Toujours charger remote.data — c'est la source de vérité Firebase
+    S.data = remote.data;
+    S.data.forEach(function(d){
+      if(!d._edits) d._edits = {};
+      EDITABLE_FIELDS.forEach(function(k){
+        if(d[k] !== null && d[k] !== undefined && !d._edits[k]){
+          d._edits[k] = {by:'TPA', at:'2026-02-19 00:00'};
         }
-      }
-    }
-  } else if(remote.data){
-    if(!S.data || !S.data.length){
-      if(Array.isArray(remote.data) && remote.data.length) S.data = remote.data;
-    }
+      });
+    });
   }
   if(remote.settings) S.settings = remote.settings;
   if(remote.deliveries) S.deliveries = remote.deliveries;
