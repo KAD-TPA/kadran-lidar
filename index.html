@@ -610,9 +610,11 @@ tr:hover td{background:var(--surf2);}
             <select class="fsel" id="ph-step" onchange="renderPhase(_curPhase)"><option value="">Toutes étapes</option></select>
             <select class="fsel" id="ph-step-status" onchange="renderPhase(_curPhase)">
               <option value="">Tous états</option>
-              <option value="OK">✓ OK</option>
+              <option value="OK">✅ OK</option>
               <option value="EN_COURS">⏳ En cours</option>
               <option value="NON">✗ Non OK</option>
+              <option value="NOK">🔴 NOK</option>
+              <option value="A_FAIRE">⭕ À faire</option>
               <option value="null">— Vide</option>
             </select>
             <select class="fsel" id="ph-status" onchange="renderPhase(_curPhase)">
@@ -641,9 +643,10 @@ tr:hover td{background:var(--surf2);}
             <div>
               <div class="fi-lbl">Nouvel état</div>
               <select class="fsel" id="bulk-value" onchange="updateBulkPreview()">
-                <option value="OK">✓ OK</option>
+                <option value="OK">✅ OK</option>
                 <option value="EN_COURS">⏳ En cours</option>
-                <option value="NON-LIVRÉ">✗ Non OK</option>
+                <option value="NON">✗ Non OK</option>
+                <option value="A_REPRENDRE">🔄 À reprendre</option>
                 <option value="">— Vider</option>
               </select>
             </div>
@@ -1430,7 +1433,7 @@ function save(){
     _lastSaveTs = _ts; // évite le re-render au retour de notre propre écriture
     var payload = {
       data: S.data,
-      settings: S.settings,
+      settings: S.settings || {},
       deliveries: S.deliveries,
       reprises: S.reprises,
       phaseComments: S.phaseComments || [],
@@ -1438,7 +1441,6 @@ function save(){
       acqSettings: S.acqSettings || {},
       acqContacts: S.acqContacts || [],
       consignes: S.consignes || [],
-      settings: S.settings || {},
       cadNotes: S.cadNotes || '',
       _ts: _ts
     };
@@ -1457,6 +1459,7 @@ function save(){
             sv[pi].deliveries=payload.deliveries;
             sv[pi].cadNotes=payload.cadNotes;
             sv[pi].consignes=payload.consignes;
+            sv[pi].settings=payload.settings;
             sv[pi].data=payload.data;
             sv[pi].reprises=payload.reprises;
             localStorage.setItem('kadran_projects',JSON.stringify(sv));
@@ -1896,12 +1899,50 @@ function renderDashboard(){
   document.getElementById('s-repr').textContent=reprLits;
   updateRemBadge();
 
-  var phases=[{l:'Calcul expédié',k:'acq_calcul_exp'},{l:'Ctrl complétude',k:'acq_ctrl_complet'},{l:'Ctrl précision',k:'acq_ctrl_prec'},{l:'Gén. LiDAR brut',k:'gen_lidar_brut'},{l:'Import LiDAR',k:'import_lidar'},{l:'Ctrl géoréf.',k:'ctrl_geo'},{l:'Matching',k:'matching'},{l:'Ctrl préclassif.',k:'ctrl_preclassif'},{l:'Import dalles',k:'import_dalles'},{l:'Livraison finale',k:'ctrl_livraison'}];
-  document.getElementById('dash-phases').innerHTML=phases.map(function(p){
-    var ok=S.data.filter(function(d){return d[p.k]==='OK';}).length;
-    var pct=tot?Math.round(ok/tot*100):0;
-    var cls=pct===100?'p-full':pct>50?'':'p-low';
-    return '<div style="margin-bottom:9px"><div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:2px"><span>'+p.l+'</span><span style="color:var(--muted)">'+pct+'%</span></div><div class="pb-wrap"><div class="pb-fill '+cls+'" style="width:'+pct+'%"></div></div></div>';
+  // ── Calcul des 9 indicateurs d'avancement ──
+  function pctOK(key){ return tot ? Math.round(S.data.filter(function(d){return d[key]==='OK';}).length/tot*100) : 0; }
+  function pctFilled(key){ return tot ? Math.round(S.data.filter(function(d){return d[key]&&d[key]!==''&&d[key]!==null;}).length/tot*100) : 0; }
+
+  // 1. Acquisition : % LIT à 100% de couverture par trajectoires primaires
+  var nAcqOk = 0;
+  if(typeof _litCoverageCompute === 'function' && MAP_GEOJSON && MAP_GEOJSON.features && MAP_GEOJSON.features.length){
+    _clearLitCoverageCache();
+    S.data.forEach(function(d){ if((_litCoverageCompute(d.lit)||0) >= 100) nAcqOk++; });
+  }
+  var pctAcq = tot ? Math.round(nAcqOk/tot*100) : 0;
+
+  // 2. Traitement trajectoire : LIT à 100% de couverture ET toutes trajectoires primaires calculées
+  var nTrajOk = 0;
+  S.data.forEach(function(d){
+    var pct = typeof _litCoverageCompute==='function' ? (_litCoverageCompute(d.lit)||0) : 0;
+    if(pct < 100) return;
+    var tj = _getTrajForLit(d.lit);
+    if(!tj.primary.length) return;
+    if(tj.primary.every(function(t){ return t.calcOk; })) nTrajOk++;
+  });
+  var pctTraj = tot ? Math.round(nTrajOk/tot*100) : 0;
+
+  var AVANCEMENT = [
+    {l:'1. Acquisition',            pct: pctAcq,              color:'#0891b2'},
+    {l:'2. Trt trajectoire',         pct: pctTraj,             color:'#0e7490'},
+    {l:'3. Matching',               pct: pctOK('ctrl_matching'),color:'#3B8BD4'},
+    {l:'4. Pré-classification',     pct: pctFilled('cls_date_envoi_kad'), color:'#6366f1'},
+    {l:'5. Classification',         pct: pctOK('cls_valid_cls'),  color:'#9333ea'},
+    {l:'6. Modélisation',           pct: pctOK('cls_valid_mod'),  color:'#c026d3'},
+    {l:'7. Préparation livraison',  pct: pctOK('ctrl_import_kad'),color:'#d97706'},
+    {l:'8. Disponibilité livraison',pct: pctFilled('pv_controle'),color:'#ea580c'},
+    {l:'9. Livraison',              pct: Math.round(S.data.filter(delivered).length/(tot||1)*100), color:'#16a34a'},
+  ];
+
+  document.getElementById('dash-phases').innerHTML = AVANCEMENT.map(function(p){
+    var cls = p.pct===100 ? 'p-full' : p.pct > 50 ? '' : 'p-low';
+    return '<div style="margin-bottom:8px">'
+      +'<div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:2px">'
+      +'<span style="color:var(--txt);font-weight:500">'+p.l+'</span>'
+      +'<span style="color:var(--muted);font-family:monospace">'+p.pct+'%</span>'
+      +'</div>'
+      +'<div class="pb-wrap"><div class="pb-fill '+cls+'" style="width:'+p.pct+'%;background:'+p.color+'"></div></div>'
+      +'</div>';
   }).join('');
 
   document.getElementById('dash-lots').innerHTML=lots().map(function(lot){
@@ -2607,6 +2648,20 @@ var _sortState={lits:{col:'lit',dir:1},livraison:{col:'planning',dir:1},phase:{c
 function sortBy(table,col){var s=_sortState[table];if(s.col===col)s.dir*=-1;else{s.col=col;s.dir=1;}
   if(table==='lits')renderLits();else if(table==='livraison')renderLivraison();else if(table==='phase')renderPhase(_curPhase);else if(table==='historique')renderHistorique();}
 function _sortArr(arr,col,dir){return arr.slice().sort(function(a,b){
+  // Tri spécial colonnes phase précédente
+  if(col==='_prev_trt'||col==='_prev_cls'||col==='_prev_kad'){
+    var _order={'OK':3,'EN_COURS':2,'NOK':1,'A_FAIRE':0};
+    var phKey = col==='_prev_trt'?'trt':col==='_prev_cls'?'cls':'kad';
+    var va2 = _order[_phaseStatusVal(a.lit, phKey)]||0;
+    var vb2 = _order[_phaseStatusVal(b.lit, phKey)]||0;
+    return (va2 - vb2) * dir;
+  }
+  // Tri spécial colonne trajectoire : utilise le % de couverture
+  if(col==='_traj'){
+    var pa = typeof _litCoverageCompute==='function' ? (_litCoverageCompute(a.lit)||0) : 0;
+    var pb = typeof _litCoverageCompute==='function' ? (_litCoverageCompute(b.lit)||0) : 0;
+    return (pa - pb) * dir;
+  }
   var va=a[col],vb=b[col];if(va==null)va='';if(vb==null)vb='';
   if(col==='lot'||col==='lineaire')return((parseFloat(va)||0)-(parseFloat(vb)||0))*dir;
   return String(va).localeCompare(String(vb),'fr')*dir;});}
@@ -2845,9 +2900,9 @@ function showLotDetail(lot){
 // ── PHASES ──
 var PH_CFG={
   trt:{cols:['LIT','SECTEUR','Trajectoire','Gén. LiDAR brut','Import LiDAR','Ctrl géoréf.','Matching','Ctrl matching','Préclassif. Kadran','Ctrl préclassif.','Commentaires'],keys:['lit','lot','_traj','gen_lidar_brut','import_lidar','ctrl_geo','matching','ctrl_matching','preclassif_kad','ctrl_preclassif','_phcomments']},
-  cls:{cols:['LIT','SECTEUR','Date envoi Kad','Valid. modél.','Valid. classif.','Fusion','Commentaires'],keys:['lit','lot','cls_date_envoi_kad','cls_valid_mod','cls_valid_cls','cls_fusion','_phcomments']},
-  kad:{cols:['LIT','SECTEUR','Tri câbles','Ctrl trous sol','Ctrl densité pylônes','Déclassification','Import LIT','Ctrl import','Commentaires'],keys:['lit','lot','tri_cables','ctrl_trous','ctrl_dens_pylones','declassif','import_lit','ctrl_import_kad','_phcomments']},
-  liv:{cols:['LIT','SECTEUR','Restit. emprise','Restit. caract.','Restit. trajectoire','Rapport météo','PV contrôle','Ctrl livraison 🤖','Date livraison 🤖','Commentaires'],keys:['lit','lot','restit_emprise','restit_caract','restit_traj','rapport_meteo','pv_controle','ctrl_livraison','date_livraison','_phcomments']}
+  cls:{cols:['LIT','SECTEUR','Trt Brut','Date envoi Kad','Valid. modél.','Valid. classif.','Fusion','Commentaires'],keys:['lit','lot','_prev_trt','cls_date_envoi_kad','cls_valid_mod','cls_valid_cls','cls_fusion','_phcomments']},
+  kad:{cols:['LIT','SECTEUR','Classification','Tri câbles','Ctrl trous sol','Ctrl densité pylônes','Déclassification','Import LIT','Ctrl import','Commentaires'],keys:['lit','lot','_prev_cls','tri_cables','ctrl_trous','ctrl_dens_pylones','declassif','import_lit','ctrl_import_kad','_phcomments']},
+  liv:{cols:['LIT','SECTEUR','Prép. livraison','Restit. emprise','Restit. caract.','Restit. trajectoire','Rapport météo','PV contrôle','Ctrl livraison 🤖','Date livraison 🤖','Commentaires'],keys:['lit','lot','_prev_kad','restit_emprise','restit_caract','restit_traj','rapport_meteo','pv_controle','ctrl_livraison','date_livraison','_phcomments']}
 };
 var EDITABLE=new Set(['acq_calcul_exp','acq_ctrl_caract','acq_ctrl_complet','acq_ctrl_prec','gen_lidar_brut','import_lidar','ctrl_geo','matching','ctrl_matching','preclassif_kad','ctrl_preclassif','ctrl_v1','ctrl_v2','ctrl_v3','tri_cables','ctrl_trous','ctrl_dens_pylones','declassif','import_lit','ctrl_import_kad','restit_emprise','restit_caract','restit_traj','rapport_meteo','pv_controle','ctrl_livraison']);
 
@@ -3026,7 +3081,7 @@ function _chronoTick(){
   el.textContent=str;
   var tps=(h?h+'h ':'')+m%60+'m '+s%60+'s';
   _acqDraft.tpsVol=tps;
-  var tv=document.getElementById('acq-tps-vol'); if(tv) tv.textContent=tps;
+  var tv=document.getElementById('acq-tps-vol'); if(tv){ if(tv.tagName==='INPUT') tv.value=(tps==='—'?'':tps); else tv.textContent=tps; }
 }
 
 function startChrono(){
@@ -3052,7 +3107,7 @@ function startChrono(){
     _chrono.dateDebut=iso; _acqDraft.debut=iso;
     var fi=document.getElementById('acq-debut'); if(fi) fi.value=iso;
     var ff=document.getElementById('acq-fin'); if(ff) ff.value='';
-    document.getElementById('acq-tps-vol')&&(document.getElementById('acq-tps-vol').textContent='—');
+    var _tvr=document.getElementById('acq-tps-vol'); if(_tvr){ if(_tvr.tagName==='INPUT') _tvr.value=''; else _tvr.textContent='—'; }
     // Fetch atmo + Kp au lancement
     _acqDraft.atmoFetching=true; _updateFormAtmoDisplay();
     _fetchFormAtmo();
@@ -3085,7 +3140,7 @@ function stopChrono(){
   var str=(h?String(h).padStart(2,'0')+':':'00:')+(String(m%60).padStart(2,'0'))+':'+String(s%60).padStart(2,'0');
   var el=document.getElementById('acq-chrono-time'); if(el) el.textContent=str;
   var ff=document.getElementById('acq-fin'); if(ff) ff.value=iso;
-  var tv=document.getElementById('acq-tps-vol'); if(tv) tv.textContent=tps;
+  var tv=document.getElementById('acq-tps-vol'); if(tv){ if(tv.tagName==='INPUT') tv.value=(tps==='—'?'':tps); else tv.textContent=tps; }
   _updateChronoBtns();
 }
 
@@ -3151,8 +3206,9 @@ function renderAcqNouveauVol(){
     +'</div>'
 
     +'<div class="fi-group" style="margin-bottom:12px">'
-    +'<div class="fi-lbl">Temps de vol</div>'
-    +'<div id="acq-tps-vol" style="font-size:18px;font-weight:700;font-family:monospace;padding:4px 0;color:var(--txt)">'+d.tpsVol+'</div>'
+    +'<div class="fi-group" style="margin-bottom:12px">'
+    +'<div class="fi-lbl">Temps de vol <span style="font-size:9px;color:var(--muted);font-weight:400">(HH:MM:SS — éditable si chrono non utilisé)</span></div>'
+    +'<input type="text" id="acq-tps-vol" class="fi" placeholder="HH:MM:SS" value="'+(d.tpsVol&&d.tpsVol!=='—'?d.tpsVol.replace(/"/g,'&quot;'):'')+'" style="font-size:15px;font-weight:700;font-family:monospace;max-width:160px" oninput="_acqDraft.tpsVol=this.value.trim()||\x27—\x27" onblur="_acqDraft.tpsVol=this.value.trim()||\x27—\x27">'
     +'</div>'
     // Conditions atmo (rempli automatiquement au Début)
     +'<div id="form-atmo-section"></div>'
@@ -3453,7 +3509,9 @@ function editAcqLog(id){
     _trajFile:   null, _trajFileName:'', _trajFileSize:0,
     _trajDestPath: _acqDraft ? (_acqDraft._trajDestPath||'') : ''
   };
-  switchAcqTab('nouveau');
+  // Activer l'onglet 'Déclarer un vol' et afficher le formulaire pré-rempli
+  var tabEl = document.querySelector('#acq-tabs .tab:nth-child(2)');
+  showAcqTab('nouveau', tabEl);
 }
 
 
@@ -3891,7 +3949,8 @@ function _switchWindyOv(btn){
 // Secondaire: au moins un point <200m mais pas primaire
 // ═══════════════════════════════════════════
 
-var _litWgs84Cache = {}; // cache LIT → [{lon,lat}]
+var _litWgs84Cache = {};
+  _litCoverageCache = {}; // cache LIT → [{lon,lat}]
 
 // Distance d'un point (WGS84 degrés) à un segment (WGS84 degrés), résultat en mètres
 function _distPtToSegM(plat, plon, alat, alon, blat, blon) {
@@ -3938,6 +3997,91 @@ function _getLitPolyWgs84(litName) {
   _litWgs84Cache[litName] = poly;
   return poly;
 }
+
+// ────────────────────────────────────────────────────────
+// COUVERTURE LIT PAR TRAJECTOIRES PRIMAIRES
+// ────────────────────────────────────────────────────────
+
+// Projeter un point sur la polyligne et retourner {distToLine (m), posOnLine (m)}
+// poly = [[lon,lat], ...]
+function _projectPointOnPolyline(lat, lon, poly) {
+  var mPerLat = 111320;
+  var mPerLon = 111320 * Math.cos(lat * Math.PI / 180);
+  var px = lon * mPerLon, py = lat * mPerLat;
+  var minDist = Infinity, bestPos = 0, cumLen = 0;
+  for (var i = 0; i < poly.length - 1; i++) {
+    var aLat = poly[i][1],   aLon = poly[i][0];
+    var bLat = poly[i+1][1], bLon = poly[i+1][0];
+    var ax = aLon*mPerLon, ay = aLat*mPerLat;
+    var bx = bLon*mPerLon, by = bLat*mPerLat;
+    var dx = bx-ax, dy = by-ay, len2 = dx*dx+dy*dy;
+    var segLen = Math.sqrt(len2);
+    var t = len2 > 0 ? Math.max(0, Math.min(1, ((px-ax)*dx+(py-ay)*dy)/len2)) : 0;
+    var rx = px-(ax+t*dx), ry = py-(ay+t*dy);
+    var dist = Math.sqrt(rx*rx+ry*ry);
+    if (dist < minDist) { minDist = dist; bestPos = cumLen + t*segLen; }
+    cumLen += segLen;
+  }
+  return { distToLine: minDist, posOnLine: bestPos, totalLen: cumLen };
+}
+
+// Cache des couvertures calculées : {litName: pct}
+var _litCoverageCache = {};
+
+// Calculer le % de couverture d'une LIT par l'union de toutes ses trajectoires primaires
+function _litCoverageCompute(litName) {
+  if (_litCoverageCache.hasOwnProperty(litName)) return _litCoverageCache[litName];
+  var poly = _getLitPolyWgs84(litName);
+  if (!poly || poly.length < 2) return null;
+
+  // Longueur totale de la LIT depuis les données
+  var litDat = S.data.find(function(d){ return d.lit === litName; });
+  var litLenKm = litDat ? parseFloat(litDat.lineaire)||0 : 0;
+
+  // Calculer depuis la géométrie si non disponible
+  var geomLen = 0;
+  for (var i = 0; i < poly.length-1; i++) {
+    geomLen += _rawHaversine(poly[i][1], poly[i][0], poly[i+1][1], poly[i+1][0]);
+  }
+  var litLenM = litLenKm > 0 ? litLenKm * 1000 : geomLen;
+  if (litLenM <= 0) return null;
+
+  var DIST_PRIMARY = parseFloat((S.settings||{}).dist_primary) || 50;
+  var STEP = 50; // discrétisation : segments de 50m
+  var N = Math.ceil(litLenM / STEP);
+  var covered = new Uint8Array(N); // 0 = non couvert, 1 = couvert
+
+  // Collecter toutes les trajectoires primaires pour cette LIT
+  (S.flightLogs||[]).forEach(function(log) {
+    (log.trajAxes||[]).forEach(function(ax) {
+      if (!ax.pts || !ax.pts.length) return;
+      if (!ax.linkedLits) return;
+      var pri = Array.isArray(ax.linkedLits.primary) ? ax.linkedLits.primary : [];
+      if (pri.indexOf(litName) === -1) return;
+      // Marquer les segments couverts
+      ax.pts.forEach(function(p) {
+        if (!p.lat || !p.lon) return;
+        var proj = _projectPointOnPolyline(p.lat, p.lon, poly);
+        if (proj.distToLine < DIST_PRIMARY) {
+          var si = Math.floor(proj.posOnLine / STEP);
+          if (si >= 0 && si < N) covered[si] = 1;
+          // Couvrir aussi les segments adjacents pour lisser
+          if (si > 0)   covered[si-1] = 1;
+          if (si < N-1) covered[si+1] = 1;
+        }
+      });
+    });
+  });
+
+  var nCovered = 0;
+  for (var j = 0; j < N; j++) if (covered[j]) nCovered++;
+  var pct = Math.round(nCovered / N * 100);
+  _litCoverageCache[litName] = pct;
+  return pct;
+}
+
+// Vider le cache quand les trajectoires changent
+function _clearLitCoverageCache() { _litCoverageCache = {}; }
 
 // Test si un axe est primaire/secondaire pour une LIT donnée
 function _matchAxisToLit(axPts, litPoly) {
@@ -4019,6 +4163,7 @@ function _runTrajLitMatching(log) {
     ax.linkedLits = { primary: primary, secondary: secondary };
   });
 
+  _clearLitCoverageCache(); // invalidate coverage cache
   save();
   // Rafraîchir la phase si visible
   if(_curPhase === 'trt' || _curPhase === 'acq' || _curPhase === 'traj') {
@@ -4068,10 +4213,16 @@ function _getTrajForLit(litName) {
 }
 
 // Vérifier si une LIT peut commencer le traitement brut
+// Bloqué si : couverture < 100% OU au moins une primaire non calculée
 function _litTrtBrutBlocked(litName) {
   var tj = _getTrajForLit(litName);
-  if(!tj.primary.length) return false; // Pas de traj primaire connue → non bloqué
-  return tj.primary.some(function(t){ return !t.calcOk; });
+  if(!tj.primary.length) return true;  // Aucune trajectoire primaire = 0% de couverture → bloqué
+  // Vérifier que toutes les primaires sont calculées
+  if(tj.primary.some(function(t){ return !t.calcOk; })) return true;
+  // Vérifier que la couverture est à 100%
+  var pct = _litCoverageCompute(litName);
+  if(pct !== null && pct < 100) return true;
+  return false;
 }
 
 // ═══════════════════════════════════════════
@@ -5146,8 +5297,15 @@ function fillPhaseStepFilter(){
   var sel=document.getElementById('ph-step');
   if(!sel) return;
   sel.innerHTML='<option value="">Toutes étapes</option>';
-  cfg.keys.slice(2).filter(function(k){ return k[0]!=='_'; }).forEach(function(k,i){
-    sel.add(new Option(cfg.cols[i+2], k));
+  cfg.keys.slice(2).forEach(function(k,i){
+    var col=cfg.cols[i+2];
+    if(!col) return;
+    // Inclure les colonnes _prev_* avec leur label
+    if(k==='_prev_trt'||k==='_prev_cls'||k==='_prev_kad'){
+      sel.add(new Option(col, k));
+    } else if(k[0]!=='_'){
+      sel.add(new Option(col, k));
+    }
   });
 }
 function fillBulkSteps(){
@@ -5155,8 +5313,11 @@ function fillBulkSteps(){
   var sel=document.getElementById('bulk-step');
   if(!sel) return;
   sel.innerHTML='<option value="">— Choisir une étape —</option>';
-  cfg.keys.slice(2).filter(function(k){ return k[0]!=='_'; }).forEach(function(k,i){
-    if(EDITABLE.has(k)) sel.add(new Option(cfg.cols[i+2], k));
+  cfg.keys.forEach(function(k, i){
+    if(k[0]==='_') return;            // ignorer les colonnes calculées
+    if(!EDITABLE.has(k)) return;      // ignorer les colonnes non éditables
+    var label = cfg.cols[i] || k;
+    sel.add(new Option(label, k));
   });
   updateBulkPreview();
 }
@@ -5187,7 +5348,7 @@ function updateBulkPreview(){
   var cfg=PH_CFG[_curPhase];
   var stepLabel=cfg.cols[cfg.keys.indexOf(step)];
   var targets=getBulkTargets();
-  var valLabel=val==='OK'?'✓ OK':val==='EN_COURS'?'⏳ En cours':val==='NON-LIVRÉ'?'✗ Non OK':'— Vide';
+  var valLabel=val==='OK'?'✅ OK':val==='EN_COURS'?'⏳ En cours':val==='NON'?'✗ Non OK':val==='A_REPRENDRE'?'🔄 À reprendre':'— Vide';
   prev.style.display='';
   prev.innerHTML='<b>'+targets.length+' LIT'+(targets.length>1?'s':'')+'</b> seront modifiées : <b>'+stepLabel+'</b> → <b>'+valLabel+'</b>';
 }
@@ -5214,7 +5375,7 @@ function applyBulkUpdate(){
   if(!targets.length){ alert('Aucune LIT à modifier.'); return; }
   var cfg=PH_CFG[_curPhase];
   var stepLabel=cfg.cols[cfg.keys.indexOf(step)];
-  var valLabel=val==='OK'?'OK':val==='EN_COURS'?'En cours':val==='NON-LIVRÉ'?'Non OK':'vide';
+  var valLabel=val==='OK'?'OK':val==='EN_COURS'?'En cours':val==='NON'?'Non OK':val==='A_REPRENDRE'?'À reprendre':'vide';
   if(!confirm('Confirmer : mettre "'+stepLabel+'" à "'+valLabel+'" pour '+targets.length+' LIT'+(targets.length>1?'s':'')+'?')) return;
   targets.forEach(function(d){
     d[step] = val||null;
@@ -5224,6 +5385,65 @@ function applyBulkUpdate(){
   renderPhase(_curPhase);
   updateBulkPreview();
 }
+// Vérifier si une étape est bloquée par les étapes précédentes non validées
+// Ordre séquentiel par phase — une étape nécessite que la précédente soit OK/renseignée
+// Séquence des étapes par phase — tableau de groupes
+// Chaque groupe = étapes pouvant être faites en parallèle
+// Un groupe est débloqué seulement si TOUS les groupes précédents ont au moins un champ renseigné
+var _PHASE_SEQ = {
+  trt: [
+    ['gen_lidar_brut'],
+    ['import_lidar'],
+    ['ctrl_geo'],
+    ['matching'],
+    ['ctrl_matching'],
+    ['preclassif_kad'],
+    ['ctrl_preclassif']
+  ],
+  cls: [
+    ['cls_date_envoi_kad'],
+    ['cls_valid_mod','cls_valid_cls'],  // parallèle : modélisation + classification
+    ['cls_fusion']
+  ],
+  kad: [
+    ['tri_cables'],
+    ['ctrl_trous'],
+    ['ctrl_dens_pylones'],
+    ['declassif'],
+    ['import_lit'],
+    ['ctrl_import_kad']
+  ],
+  liv: [
+    ['restit_emprise','restit_caract','restit_traj'],  // parallèle : les 3 restits
+    ['rapport_meteo'],
+    ['pv_controle'],
+    ['ctrl_livraison'],
+    ['date_livraison']
+  ]
+};
+
+function _isStepBlocked(d, ph, stepKey) {
+  var groups = _PHASE_SEQ[ph];
+  if(!groups) return false;
+  // Trouver le groupe contenant stepKey
+  var groupIdx = -1;
+  for(var g = 0; g < groups.length; g++){
+    if(groups[g].indexOf(stepKey) !== -1){ groupIdx = g; break; }
+  }
+  if(groupIdx <= 0) return false; // premier groupe : jamais bloqué
+  // Vérifier que tous les groupes précédents ont au moins une étape renseignée
+  for(var i = 0; i < groupIdx; i++){
+    var grp = groups[i];
+    var anyFilled = grp.some(function(k){ return _fieldOk ? _fieldOk(d,k) : (d[k] && d[k] !== null && d[k] !== ''); });
+    if(!anyFilled) return true;
+  }
+  return false;
+}
+
+function _stepBlockedCell(reason) {
+  return '<td><span style="color:var(--muted);font-size:10px" title="'+reason+'">🔒</span></td>';
+}
+
 function renderPhase(ph){
   if(ph==='cls'){ renderClsPhase(); return; }
   if(ph==='acq'){ renderFlightLogs(); return; }
@@ -5244,10 +5464,17 @@ function renderPhase(ph){
     if(lotF&&String(d.lot)!==String(lotF)) return false;
     // Per-step filter
     if(stepF&&stepStatusF){
-      var v=d[stepF];
-      var raw=v===null||v===undefined?null:(v==='OK'?'OK':v==='EN_COURS'?'EN_COURS':'NON');
-      if(stepStatusF==='null'&&raw!==null) return false;
-      if(stepStatusF!=='null'&&raw!==stepStatusF) return false;
+      // Colonnes phase précédente (_prev_*) : utiliser _phaseStatusVal
+      if(stepF==='_prev_trt'||stepF==='_prev_cls'||stepF==='_prev_kad'){
+        var phKey=stepF==='_prev_trt'?'trt':stepF==='_prev_cls'?'cls':'kad';
+        var psv=_phaseStatusVal(d.lit, phKey);
+        if(psv!==stepStatusF) return false;
+      } else {
+        var v=d[stepF];
+        var raw=v===null||v===undefined?null:(v==='OK'?'OK':v==='EN_COURS'?'EN_COURS':'NON');
+        if(stepStatusF==='null'&&raw!==null) return false;
+        if(stepStatusF!=='null'&&raw!==stepStatusF) return false;
+      }
     } else if(stepF&&!stepStatusF){
       // just filter to LITs that have a value for this step (non-null)
     }
@@ -5285,11 +5512,41 @@ function renderPhase(ph){
       }
       if(i===1) return '<td class="mono">'+(d[k]||'—')+'</td>';
       if(k==='_traj') return '<td>'+_trajStatusCell(d.lit)+'</td>';
+      if(k==='_prev_trt') return '<td style="text-align:center">'+_phaseStatusBadge(d.lit,'trt')+'</td>';
+      if(k==='_prev_cls') return '<td style="text-align:center">'+_phaseStatusBadge(d.lit,'cls')+'</td>';
+      if(k==='_prev_kad') return '<td style="text-align:center">'+_phaseStatusBadge(d.lit,'kad')+'</td>';
       if(k==='_phcomments') return '<td style="min-width:120px">'+phCommentCell(d.lit,ph)+'</td>';
       if(EDITABLE.has(k)){
-        // Bloquer les champs trt si trajectoire primaire non calculée
+        // Bloquer les champs trt si trajectoire primaire non calculée/couverture incomplète
         if(ph==='trt' && _litTrtBrutBlocked(d.lit)){
-          return '<td><span title="Trajectoires principales non calculées" style="color:var(--muted);font-size:11px">🔒 Bloqué</span></td>';
+          return '<td><span title="Trajectoire : couverture incomplète ou calcul manquant" style="color:var(--muted);font-size:10px">🔒</span></td>';
+        }
+        // Bloquer les champs de classification si TRT non terminé
+        if(ph==='cls' && _phaseStatusVal(d.lit,'trt')!=='OK'){
+          return '<td><span title="Traitement brut non terminé" style="color:var(--muted);font-size:10px">🔒</span></td>';
+        }
+        // Bloquer les champs de préparation livraison si CLS non terminé
+        if(ph==='kad' && _phaseStatusVal(d.lit,'cls')!=='OK'){
+          return '<td><span title="Classification non terminée" style="color:var(--muted);font-size:10px">🔒</span></td>';
+        }
+        // Bloquer les champs de livraison après les restitutions si KAD non terminé
+        // Les restitutions (groupe 0) sont accessibles dès que kad est commencé
+        // Les étapes suivantes nécessitent kad complet
+        if(ph==='liv' && _phaseStatusVal(d.lit,'kad')!=='OK'){
+          var _livGroup0=['restit_emprise','restit_caract','restit_traj'];
+          if(_livGroup0.indexOf(k)===-1){
+            // Étape après les restitutions : bloquer si KAD pas OK
+            var _kadLabels={'tri_cables':'Tri câbles','ctrl_trous':'Ctrl trous sol','ctrl_dens_pylones':'Ctrl densité pylônes','declassif':'Déclassification','import_lit':'Import LIT','ctrl_import_kad':'Ctrl import'};
+            var _kadKeys=Object.keys(_kadLabels);
+            var _kadMissing=_kadKeys.filter(function(kk){return !_fieldOk(d,kk);}).map(function(kk){return _kadLabels[kk];});
+            return '<td><span title="Prép. livraison à terminer : '+_kadMissing.join(', ')+'" style="color:var(--muted);font-size:10px">🔒</span></td>';
+          }
+        }
+        // Bloquer si étape précédente dans la même phase non renseignée
+        if(_isStepBlocked(d, ph, k)){
+          var prevIdx = _PHASE_SEQ[ph] ? _PHASE_SEQ[ph].indexOf(k)-1 : -1;
+          var prevLabel = prevIdx>=0 && PH_CFG[ph] ? (PH_CFG[ph].cols[PH_CFG[ph].keys.indexOf(_PHASE_SEQ[ph][prevIdx])]||'étape précédente') : 'étape précédente';
+          return '<td><span title="'+prevLabel+' non renseignée" style="color:var(--muted);font-size:10px">🔒</span></td>';
         }
         return '<td>'+statusCell(d[k],d.lit,k)+'</td>';
       }
@@ -5320,9 +5577,20 @@ function clsStatusBadge(val){
 function renderClsPhase(){
   var search=((document.getElementById('ph-search')||{}).value||'').toLowerCase();
   var lotF=((document.getElementById('ph-lot')||{}).value||'');
+  var stepF=((document.getElementById('ph-step')||{}).value||'');
+  var stepStatusF=((document.getElementById('ph-step-status')||{}).value||'');
   var filtered=S.data.filter(function(d){
     if(search&&!d.lit.toLowerCase().includes(search)) return false;
     if(lotF&&String(d.lot)!==String(lotF)) return false;
+    // Filtre sur colonne phase précédente (_prev_trt)
+    if(stepF==='_prev_trt'&&stepStatusF){
+      if(_phaseStatusVal(d.lit,'trt')!==stepStatusF) return false;
+    } else if(stepF&&stepStatusF){
+      var v=d[stepF];
+      var raw=v===null||v===undefined?null:(v==='OK'?'OK':v==='EN_COURS'?'EN_COURS':'NON');
+      if(stepStatusF==='null'&&raw!==null) return false;
+      if(stepStatusF!=='null'&&raw!==stepStatusF) return false;
+    }
     return true;
   });
   var countEl=document.getElementById('ph-count');
@@ -5363,6 +5631,7 @@ function renderClsPhase(){
   var _sp=_sortState.phase; filtered=_sortArr(filtered,_sp.col,_sp.dir);
   thead.innerHTML='<tr>'
     +_th('phase','lit','LIT')+_th('phase','lot','SECTEUR')
+    +_th('phase','_prev_trt','Trt Brut')
     +'<th style="min-width:130px">Date envoi Kad</th>'
     +'<th style="min-width:80px">Versions</th>'
     +_th('phase','cls_valid_mod','Valid. modél.')
@@ -5372,25 +5641,28 @@ function renderClsPhase(){
     +'</tr>';
 
   if(!filtered.length){
-    tbody.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:18px">Aucun résultat</td></tr>';
+    tbody.innerHTML='<tr><td colspan="9" style="text-align:center;color:var(--muted);padding:18px">Aucun résultat</td></tr>';
     return;
   }
 
   tbody.innerHTML=filtered.map(function(d){
     var lE=d.lit.replace(/'/g,"\\'");
     var nv=clsGetVersions(d).length;
-    // Inline date envoi
-    var dateInline='<input type="date" value="'+(d.cls_date_envoi_kad||'')+'" style="border:1px solid var(--border);border-radius:4px;padding:2px 5px;font-size:11px;font-family:inherit;width:120px;background:transparent" onchange="clsSaveField(\''+lE+'\',\'cls_date_envoi_kad\',this.value)">';
+    // Inline date envoi — bloqué si TRT pas terminé
+    var _trtOk = _phaseStatusVal(d.lit,'trt')==='OK';
+    var dateInline = _trtOk
+      ? '<input type="date" value="'+(d.cls_date_envoi_kad||'')+'" style="border:1px solid var(--border);border-radius:4px;padding:2px 5px;font-size:11px;font-family:inherit;width:120px;background:transparent" onchange="clsSaveField(\''+lE+'\',\'cls_date_envoi_kad\',this.value)">'
+      : '<span style="font-size:10px;color:var(--muted);font-style:italic">🔒 TRT requis</span>';
     // Inline validation cells (cliquables, sans ouvrir la modal)
-    var vmCell='<span class="sc-cell '+scClass(scRaw(d.cls_valid_mod))+'" onclick="clsCycleField(\''+lE+'\',\'cls_valid_mod\')" title="Clic pour modifier">'+scLabel(d.cls_valid_mod)
-      +(d._edits&&d._edits.cls_valid_mod?'<span class="cell-author">'+d._edits.cls_valid_mod.by+' · '+d._edits.cls_valid_mod.at+'</span>':'')
-      +'</span>';
-    var vcCell='<span class="sc-cell '+scClass(scRaw(d.cls_valid_cls))+'" onclick="clsCycleField(\''+lE+'\',\'cls_valid_cls\')" title="Clic pour modifier">'+scLabel(d.cls_valid_cls)
-      +(d._edits&&d._edits.cls_valid_cls?'<span class="cell-author">'+d._edits.cls_valid_cls.by+' · '+d._edits.cls_valid_cls.at+'</span>':'')
-      +'</span>';
-    var fuCell='<span class="sc-cell '+scClass(scRaw(d.cls_fusion))+'" onclick="clsCycleField(\''+lE+'\',\'cls_fusion\')" title="Clic pour modifier">'+scLabel(d.cls_fusion)
-      +(d._edits&&d._edits.cls_fusion?'<span class="cell-author">'+d._edits.cls_fusion.by+' · '+d._edits.cls_fusion.at+'</span>':'')
-      +'</span>';
+    function _clsCell(key, label) {
+      if(_isStepBlocked(d,'cls',key)) return '<span style="color:var(--muted);font-size:10px" title="Étape précédente non renseignée">🔒</span>';
+      return '<span class="sc-cell '+scClass(scRaw(d[key]))+'" onclick="clsCycleField(\''+lE+'\',\''+key+'\')" title="Clic pour modifier">'+scLabel(d[key])
+        +(d._edits&&d._edits[key]?'<span class="cell-author">'+d._edits[key].by+' · '+d._edits[key].at+'</span>':'')
+        +'</span>';
+    }
+    var vmCell = _clsCell('cls_valid_mod');
+    var vcCell = _clsCell('cls_valid_cls');
+    var fuCell = _clsCell('cls_fusion');
     // Versions button — couleur selon état du dernier contrôle cls
     var _versions=clsGetVersions(d);
     var _lastCtrl=_versions.length?scRaw(_versions[_versions.length-1].cls_ctrl):'';
@@ -5404,10 +5676,13 @@ function renderClsPhase(){
     var vBtn=nv
       ?'<span style="'+_vStyle+';padding:2px 8px;border-radius:10px;font-size:11px;font-family:monospace;font-weight:600;margin-right:4px">V'+nv+'</span>'
       :'';
-    var vBtnOpen='<button onclick="openClsModal(\''+lE+'\')" style="border:1px solid var(--border);background:none;border-radius:5px;padding:2px 8px;font-size:10px;cursor:pointer;color:var(--blue)">Gérer</button>';
+    var vBtnOpen = _trtOk
+      ? '<button onclick="openClsModal(\''+lE+'\')" style="border:1px solid var(--border);background:none;border-radius:5px;padding:2px 8px;font-size:10px;cursor:pointer;color:var(--blue)">Gérer</button>'
+      : '<span style="font-size:10px;color:var(--muted)">🔒</span>';
     return '<tr>'
       +'<td><span class="mono" style="color:var(--red);font-weight:700">'+d.lit+'</span></td>'
       +'<td class="mono">'+(d.lot||'—')+'</td>'
+      +'<td style="text-align:center">'+_phaseStatusBadge(d.lit,'trt')+'</td>'
       +'<td>'+dateInline+'</td>'
       +'<td>'+vBtn+vBtnOpen+'</td>'
       +'<td>'+vmCell+'</td>'
@@ -5457,8 +5732,8 @@ function openClsModal(lit){
       var modPrev=prevV?(prevV.mod_remarques||'—'):'Première version';
       var autoTag=i===0?'auto':'auto ← V'+i;
       html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">';
-      html+=_clsVBlock(lE,v,i,'cls',clsPrev,autoTag,'#9333ea','Classification V'+(i+1),'Date réception LiDAR classifié IFM','cls_date_recep','cls_ctrl','cls_remarques');
-      html+=_clsVBlock(lE,v,i,'mod',modPrev,autoTag,'#0891b2','Modélisation V'+(i+1),'Date réception LiDAR modélisé IFM','mod_date_recep','mod_ctrl','mod_remarques');
+      html+=_clsVBlock(lE,v,i,'cls',clsPrev,autoTag,'#9333ea','Classification V'+(i+1),'Date réception LiDAR classifié IFM','cls_date_recep','cls_ctrl','cls_remarques',prevV);
+      html+=_clsVBlock(lE,v,i,'mod',modPrev,autoTag,'#0891b2','Modélisation V'+(i+1),'Date réception LiDAR modélisé IFM','mod_date_recep','mod_ctrl','mod_remarques',prevV);
       html+='</div>';
     });
   }
@@ -5468,7 +5743,7 @@ function openClsModal(lit){
   document.getElementById('modal-bg').classList.add('open');
 }
 
-function _clsVBlock(lE,v,vIdx,side,remarquesPrev,autoTag,color,title,dateLabel,dateKey,ctrlKey,remarquesKey){
+function _clsVBlock(lE,v,vIdx,side,remarquesPrev,autoTag,color,title,dateLabel,dateKey,ctrlKey,remarquesKey,d_v_prev){
   var val=v[ctrlKey];
   var editInfo='';
   if(v._edits&&v._edits[ctrlKey]){var e=v._edits[ctrlKey];editInfo='<span class="cell-author">'+e.by+' · '+e.at+'</span>';}
@@ -5484,9 +5759,10 @@ function _clsVBlock(lE,v,vIdx,side,remarquesPrev,autoTag,color,title,dateLabel,d
     +'<input type="date" class="fi" style="font-size:11px" value="'+(v[dateKey]||'')+'" onchange="clsSaveVersionField(\''+lE+'\','+vIdx+',\''+dateKey+'\',this.value)">'
     +'</div>'
     +'<div class="fi-group" style="margin-bottom:8px"><div class="fi-lbl">Contrôle</div>'
-    +'<span class="sc-cell '+scClass(scRaw(val))+'" onclick="clsCycleCtrl(\''+lE+'\','+vIdx+',\''+ctrlKey+'\')" title="Clic pour modifier">'+scLabel(val)+editInfo+'</span>'
+    +(vIdx>0&&d_v_prev&&scRaw(d_v_prev[ctrlKey])!=='OK'&&scRaw(d_v_prev[ctrlKey])!=='A_REPRENDRE'
+      ? '<span style="color:var(--muted);font-size:10px" title="V'+vIdx+' doit être OK ou À reprendre">🔒 V'+vIdx+' non validée</span>'
+      : '<span class="sc-cell '+scClass(scRaw(val))+'" onclick="clsCycleCtrl(\''+lE+'\','+vIdx+',\''+ctrlKey+'\')" title="Clic pour modifier">'+scLabel(val)+editInfo+'</span>')
     +'</div>'
-    +'<div class="fi-group"><div class="fi-lbl">Remarques</div>'
     +'<textarea class="ta" style="min-height:40px;font-size:11px" onchange="clsSaveVersionField(\''+lE+'\','+vIdx+',\''+remarquesKey+'\',this.value)" placeholder="Remarques…">'+(v[remarquesKey]||'')+'</textarea>'
     +'</div>'
     +'</div></div>';
@@ -5495,6 +5771,10 @@ function _clsVBlock(lE,v,vIdx,side,remarquesPrev,autoTag,color,title,dateLabel,d
 function clsAddVersion(lit){
   if(READ_ONLY) return;
   var d=clsGetD(lit); if(!d) return;
+  if(_phaseStatusVal(lit,'trt')!=='OK'){
+    showStepError('Le traitement brut doit être terminé (OK) avant d\'ajouter une version de classification.');
+    return;
+  }
   if(!d.cls_versions) d.cls_versions=[];
   var versions=d.cls_versions;
   if(versions.length>0){
@@ -5535,11 +5815,12 @@ function clsCycleCtrl(lit,vIdx,ctrlKey){
   var cur=scRaw(v[ctrlKey]);
   var idx=CLS_SC.indexOf(cur); if(idx<0)idx=0;
   var next=CLS_SC[(idx+1)%CLS_SC.length];
-  // Séquentialité inter-versions
-  if((next==='OK'||next==='EN_COURS'||next==='A_REPRENDRE')&&next!==''&&vIdx>0){
-    var prevV=d.cls_versions[vIdx-1];
-    if(next==='OK'&&scRaw(prevV[ctrlKey])!=='OK'){
-      showStepError('Le contrôle de la version précédente doit être OK pour valider.');
+  // Séquentialité inter-versions : V(N) modifiable seulement si V(N-1) est OK ou À reprendre
+  if(vIdx > 0 && next !== '') {
+    var prevV = d.cls_versions[vIdx-1];
+    var prevCtrl = scRaw(prevV[ctrlKey]);
+    if(prevCtrl !== 'OK' && prevCtrl !== 'A_REPRENDRE') {
+      showStepError('La version V'+vIdx+' doit être "OK" ou "À reprendre" avant de renseigner la V'+(vIdx+1)+'.');
       return;
     }
   }
@@ -6289,19 +6570,87 @@ async function _analyzeTrajAndAlert(parsedRaw, logId){
 // ═══════════════════════════════════════════
 
 // Badge statut trajectoire dans la colonne Traitement Brut
+// Calcul de l'état d'avancement d'une phase pour une LIT donnée
+// Retourne : 'OK' | 'EN_COURS' | 'NOK' | 'A_FAIRE'
+// Champs date (non-status) : considérés "OK" s'ils sont renseignés (non vides)
+// Uniquement les vrais champs de date — les champs statut restent OK/NON
+var _DATE_FIELDS = {'cls_date_envoi_kad':true,'cls_date_recep':true,'mod_date_recep':true,'date_livraison':true};
+
+function _fieldOk(d, k) {
+  if(_DATE_FIELDS[k]) return !!(d[k] && d[k] !== '');  // date : renseignée = OK
+  return d[k] === 'OK';
+}
+function _fieldNok(d, k) {
+  if(_DATE_FIELDS[k]) return false;  // date : ne peut pas être NOK
+  return d[k] === 'NON' || d[k] === 'A_REPRENDRE' || d[k] === 'NON-LIVRÉ';
+}
+
+function _phaseStatusVal(litName, phaseKey) {
+  var keys = {
+    trt: ['gen_lidar_brut','import_lidar','ctrl_geo','matching','ctrl_matching','preclassif_kad','ctrl_preclassif'],
+    cls: ['cls_date_envoi_kad','cls_valid_mod','cls_valid_cls','cls_fusion'],
+    kad: ['tri_cables','ctrl_trous','ctrl_dens_pylones','declassif','import_lit','ctrl_import_kad']
+  }[phaseKey];
+  if(!keys) return 'A_FAIRE';
+  var d = S.data.find(function(x){ return x.lit === litName; });
+  if(!d) return 'A_FAIRE';
+  var ok  = keys.filter(function(k){ return _fieldOk(d, k); }).length;
+  var nok = keys.filter(function(k){ return _fieldNok(d, k); }).length;
+  if(ok === keys.length) return 'OK';
+  if(nok > 0) return 'NOK';
+  if(ok > 0)  return 'EN_COURS';
+  return 'A_FAIRE';
+}
+
+function _phaseStatusBadge(litName, phaseKey) {
+  var val = _phaseStatusVal(litName, phaseKey);
+  var cfg = {
+    'OK':       {bg:'#f0fdf4', col:'#16a34a', border:'#86efac', label:'OK'},
+    'EN_COURS': {bg:'#fffbeb', col:'#b45309', border:'#fde68a', label:'En cours'},
+    'NOK':      {bg:'#fef2f2', col:'#b91c1c', border:'#fca5a5', label:'NOK'},
+    'A_FAIRE':  {bg:'#f9fafb', col:'#6b7280', border:'#e5e7eb', label:'À faire'}
+  }[val];
+  return '<span style="background:'+cfg.bg+';color:'+cfg.col+';border:1px solid '+cfg.border
+    +';padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;white-space:nowrap">'
+    +cfg.label+'</span>';
+}
+
 function _trajStatusCell(litName) {
   var tj = _getTrajForLit(litName);
   if(!tj.primary.length && !tj.secondary.length) {
-    return '<span style="color:var(--muted);font-size:11px">—</span>';
+    return '<span style="color:#dc2626;font-size:10px;border:1px solid #dc2626;border-radius:4px;padding:2px 7px">0%</span>';
+  }
+  // Trajectoires secondaires seulement → 0% de primaire
+  if(!tj.primary.length && tj.secondary.length) {
+    var lE0=litName.replace(/'/g,"\\'");
+    return '<button onclick="openTrajLitPopup(\''+lE0+'\')" '
+      + 'style="background:none;border:1px solid #d97706;border-radius:4px;cursor:pointer;'
+      + 'padding:2px 7px;font-size:10px;color:#d97706;white-space:nowrap">'
+      + '🔶 0% · 0P/'+tj.secondary.length+'S'
+      + '</button>';
   }
   var allCalcOk = tj.primary.length > 0 && tj.primary.every(function(t){ return t.calcOk; });
   var nPri = tj.primary.length, nSec = tj.secondary.length;
-  var col = !tj.primary.length ? '#d97706' : allCalcOk ? '#16a34a' : '#dc2626';
-  var icon = !tj.primary.length ? '🔶' : allCalcOk ? '✅' : '⚠️';
-  return '<button onclick="openTrajLitPopup(\''+litName.replace(/'/g,"\\'")+'\')" '
+  var pct = tj.primary.length ? _litCoverageCompute(litName) : null;
+  var pctStr = pct !== null ? pct+'%' : '…';
+
+  // Couleur selon couverture + calcul
+  var col, icon;
+  if(!tj.primary.length){
+    col = '#d97706'; icon = '🔶';
+  } else if(!allCalcOk){
+    col = '#dc2626'; icon = '⚠️';
+  } else if(pct !== null && pct < 100){
+    col = '#d97706'; icon = '📐';
+  } else {
+    col = '#16a34a'; icon = '✅';
+  }
+
+  var lE = litName.replace(/'/g,"\\'");
+  return '<button onclick="openTrajLitPopup(\''+lE+'\')" '
     + 'style="background:none;border:1px solid '+col+';border-radius:4px;cursor:pointer;'
     + 'padding:2px 7px;font-size:10px;color:'+col+';white-space:nowrap">'
-    + icon+' '+nPri+'P / '+nSec+'S'
+    + icon+' '+pctStr+' · '+nPri+'P/'+nSec+'S'
     + '</button>';
 }
 
@@ -8035,7 +8384,8 @@ function selectProject(id){
   CURRENT_USER = '';
   READ_ONLY = false;
   // ── Réinitialiser l'état du projet ──
-  _litWgs84Cache = {};
+      _litWgs84Cache = {};
+    _litCoverageCache = {};
   // Charger depuis localStorage si disponible
   var _localLoaded = false;
   try {
