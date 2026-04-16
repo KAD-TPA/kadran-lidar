@@ -8759,13 +8759,34 @@ function _syncProjectRegistry(){
   db.ref('kadran_registry').on('value', function(snap){
     var registry=snap.val()||{};
     var changed=false;
+
+    // ── Supprimer les projets qui ont disparu de Firebase ──
+    // (index 0 = projet par défaut, jamais supprimé)
+    for(var i=PROJECTS.length-1; i>0; i--){
+      var p=PROJECTS[i];
+      if(p.id && !registry[p.id]){
+        PROJECTS.splice(i,1);
+        // Supprimer aussi du localStorage
+        try{
+          var sv=JSON.parse(localStorage.getItem('kadran_projects')||'[]');
+          sv=sv.filter(function(x){return x.id!==p.id;});
+          localStorage.setItem('kadran_projects',JSON.stringify(sv));
+        }catch(e){}
+        // Si c'était le projet actif, retour à l'écran projet
+        if(ACTIVE_PROJECT && ACTIVE_PROJECT.id===p.id){
+          ACTIVE_PROJECT=null;
+          document.getElementById('project-screen').style.display='';
+        }
+        changed=true;
+      }
+    }
+
     Object.keys(registry).forEach(function(pid){
       var proj=registry[pid];
       if(!proj||!proj.id) return;
       var existing=PROJECTS.find(function(p){return p.id===proj.id;});
       if(!existing){
         // Nouveau projet reçu de Firebase
-        // Sauvegarder localement (version allégée — sans _lits/_geojson)
         try{
           var sv=JSON.parse(localStorage.getItem('kadran_projects')||'[]');
           if(!sv.find(function(p){return p.id===proj.id;})){
