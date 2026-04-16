@@ -3792,7 +3792,7 @@ function _renderKpInto(txt, pane){
   })();
 
   function _windyUrl(overlay){
-    return 'https://embed.windy.com/embed2.html?lat='+_ctr.lat+'&lon='+_ctr.lon
+    return 'https://embed.windy.com/embed2.html?lat='+(isNaN(_ctr.lat)?48.85:_ctr.lat)+'&lon='+(isNaN(_ctr.lon)?2.35:_ctr.lon)
       +'&zoom='+_ctr.zoom+'&level=surface&overlay='+overlay
       +'&product=ecmwf&menu=&message=true&marker=true&calendar=now'
       +'&pressure=&type=map&location=coordinates&detail=&metricWind=km%2Fh&metricTemp=%C2%B0C&radarRange=-1';
@@ -3875,7 +3875,7 @@ function _switchWindyOv(btn){
     }catch(e){}
     return{lat:'46.8',lon:'2.5',zoom:7};
   })();
-  var url='https://embed.windy.com/embed2.html?lat='+ctr.lat+'&lon='+ctr.lon
+  var url='https://embed.windy.com/embed2.html?lat='+(isNaN(ctr.lat)?48.85:ctr.lat)+'&lon='+(isNaN(ctr.lon)?2.35:ctr.lon)
     +'&zoom='+ctr.zoom+'&level=surface&overlay='+ov
     +'&product=ecmwf&menu=&message=true&marker=true&calendar=now'
     +'&pressure=&type=map&location=coordinates&detail=&metricWind=km%2Fh&metricTemp=%C2%B0C&radarRange=-1';
@@ -4140,7 +4140,12 @@ var _RAF20 = (function(){
 // Attendre que RAF20 soit chargé avant l'analyse
 async function _waitRAF20(){
   if(!_RAF20_loading) return;
-  try{ await _RAF20_loading; }catch(e){}
+  try{
+    await Promise.race([
+      _RAF20_loading,
+      new Promise(function(res){ setTimeout(res, 5000); }) // 5s timeout
+    ]);
+  }catch(e){}
 }
 
 // ═══════════════════════════════════════════
@@ -6011,25 +6016,30 @@ async function _analyzeAxis(ax, params){
   });
 
   // ── Altitudes terrain MNT IGN (NGF-IGN69) par batch ──
-  var BATCH = 20; // Batches réduits pour éviter les timeouts IGN
-  for(var _bi = 0; _bi < segs.length; _bi += BATCH){
-    var _batch = segs.slice(_bi, _bi + BATCH);
-    var _lats  = _batch.map(function(s){ return s.lat_mid.toFixed(6); });
-    var _lons  = _batch.map(function(s){ return s.lon_mid.toFixed(6); });
-    await new Promise(function(res){
-      var _done = false;
-      var _timeout = setTimeout(function(){
-        if(!_done){ _done=true; res(); } // timeout 15s de sécurité
-      }, 15000);
-      _fetchIgnElevBatch(_lats, _lons, function(alts, err){
-        if(_done) return;
-        _done = true;
-        clearTimeout(_timeout);
-        _batch.forEach(function(s,j){ s.alt_terrain = alts ? (alts[j]||0) : 0; });
-        res();
+  // Vérifier la connectivité avant de lancer les appels IGN
+  var _ignOnline = navigator.onLine && location.protocol !== 'file:';
+  if(_ignOnline){
+    var BATCH = 20;
+    for(var _bi = 0; _bi < segs.length; _bi += BATCH){
+      var _batch = segs.slice(_bi, _bi + BATCH);
+      var _lats  = _batch.map(function(s){ return s.lat_mid.toFixed(6); });
+      var _lons  = _batch.map(function(s){ return s.lon_mid.toFixed(6); });
+      await new Promise(function(res){
+        var _done = false;
+        var _timeout = setTimeout(function(){
+          if(!_done){ _done=true; res(); }
+        }, 8000); // timeout réduit à 8s
+        _fetchIgnElevBatch(_lats, _lons, function(alts, err){
+          if(_done) return;
+          _done = true;
+          clearTimeout(_timeout);
+          _batch.forEach(function(s,j){ s.alt_terrain = alts ? (alts[j]||0) : 0; });
+          res();
+        });
       });
-    });
+    }
   }
+  // Si hors-ligne : alt_terrain reste à 0, agl sera null (pas d'alerte hauteur)
 
   // AGL = altitude orthométrique RAF20 − terrain IGN (tous deux en NGF-IGN69)
   segs.forEach(function(s){
@@ -6096,13 +6106,19 @@ async function _analyzeTrajAndAlert(parsedRaw, logId){
   });
   log.trajDate  = parsedRaw.date;
   log.trajReady = false;
-  save(); renderAcqNouveauVol();
+  // Exposer les seuils dans ce scope pour les utiliser dans les commentaires
+  var _refVit = mergedParams.vitesse     ? parseFloat(mergedParams.vitesse)     : 0;
+  var _refAlt = mergedParams.hauteur_agl ? parseFloat(mergedParams.hauteur_agl) : 0;
+  var _pctV   = parseFloat((S.settings||{}).pct_vitesse) || 15;
+  var _pctH   = parseFloat((S.settings||{}).pct_hauteur) || 15;
 
   // Analyser chaque axe
   var allAnalysis = [], anyWarn = false;
   // Feedback visuel pendant l'analyse
   function _setAnalysisTxt(msg){
+    // S'assurer que les éléments de progression existent
     var el=document.getElementById('traj-copy-txt');
+    if(!el){ renderAcqNouveauVol(); el=document.getElementById('traj-copy-txt'); }
     if(el) el.textContent=msg;
     var prog=document.getElementById('traj-copy-progress');
     if(prog) prog.style.display='block';
@@ -6219,6 +6235,10 @@ async function _analyzeTrajAndAlert(parsedRaw, logId){
       by:'AUTO', at:now, _csvExport:true
     });
   });
+
+  // Sauvegarder et re-rendre le formulaire APRÈS l'analyse complète
+  save();
+  renderAcqNouveauVol();
 
   // Écrire le fichier log dans le dossier destination
   if(_trajDestHandle && _acqDraft.trajFile && _acqDraft.trajFile.name){
