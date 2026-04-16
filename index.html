@@ -1442,7 +1442,7 @@ function save(){
       cadNotes: S.cadNotes || '',
       _ts: _ts
     };
-    DB_REF.set(payload, function(err){
+    DB_REF.update(payload, function(err){
       showAS(err ? 'error' : 'saved');
       if(!err){
         // Copie locale pour chargement rapide au prochain selectProject
